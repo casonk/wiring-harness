@@ -1,18 +1,24 @@
 #!/usr/bin/env python3
-"""Generate a per-device iPhone-installable mTLS identity profile.
+"""Generate per-device mTLS identity profiles for all registered devices.
 
-Issues a per-device client cert signed by the wiring-harness CA, bundles it
-into a PKCS#12, and stages a .mobileconfig + .p12 to the snowbridge share for
-easy pickup.
+Issues a per-device client cert signed by the wiring-harness CA for each entry
+in devices.toml, then delivers it according to device type:
+
+  desktop  — installs CA trust and per-device identity into Firefox and Chromium
+             NSS databases on this machine
+  mobile   — stages a .mobileconfig + .p12 to /srv/snowbridge/share/tmp/ for
+             pickup via the snowbridge SMB share
 
 Usage:
-    sudo python3 scripts/export_mtls_profile.py --device-name iphone
-    sudo python3 scripts/export_mtls_profile.py --device-name tablet --rotate
+    sudo python3 scripts/export_mtls_profile.py --all-devices
+    sudo python3 scripts/export_mtls_profile.py --device-name iphone-14-pro
+    sudo python3 scripts/export_mtls_profile.py --device-name iphone-14-pro --rotate
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import grp
 import hashlib
 import os
@@ -25,31 +31,37 @@ import ssl
 import subprocess
 import sys
 import tempfile
+import tomllib  # type: ignore[no-redef]
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NoReturn
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = SCRIPT_DIR.parent
+
+DEFAULT_DEVICES_TOML = REPO_ROOT / "devices.toml"
 DEFAULT_SHARE_TMP = Path("/srv/snowbridge/share/tmp")
 DEFAULT_OWNER = "snowbridge"
 DEFAULT_GROUP = "snowbridge"
-DEFAULT_DEVICE_NAME = "iphone"
 DEFAULT_PROFILE_IDENTIFIER_PREFIX = "local.wiring-harness.mtls"
 DEFAULT_ORGANIZATION = "wiring-harness"
 SLUG_PREFIX = "wiring-harness-mtls"
+
+CA_NICK = "Wiring Harness CA"
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 
 def _invoking_user_home() -> Path:
     sudo_user = os.environ.get("SUDO_USER")
     if sudo_user:
-        with _suppress_key_error():
+        with contextlib.suppress(KeyError):
             return Path(pwd.getpwnam(sudo_user).pw_dir)
     return Path.home()
-
-
-def _suppress_key_error():
-    import contextlib
-    return contextlib.suppress(KeyError)
 
 
 def _default_ca_cert() -> Path:
@@ -88,6 +100,13 @@ class IdentityPaths:
     staged_p12_path: Path
 
 
+@dataclass(frozen=True)
+class DeviceSpec:
+    name: str
+    type: str    # "desktop" | "mobile"
+    platform: str  # "linux" | "ios" | "macos" | …
+
+
 def log(message: str) -> None:
     print(message)
 
@@ -98,44 +117,7 @@ def fail(message: str) -> NoReturn:
 
 def require_root() -> None:
     if hasattr(os, "geteuid") and os.geteuid() != 0:
-        fail("run as root so issued identity and staged mobileconfig can be written safely")
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Build a per-device iPhone-installable mTLS client identity profile.",
-    )
-    parser.add_argument("--device-name", default=DEFAULT_DEVICE_NAME,
-                        help=f"Device label used in filenames and cert subject. Default: {DEFAULT_DEVICE_NAME}")
-    parser.add_argument("--ca-cert", default=None,
-                        help="Path to CA certificate. Default: ~/.config/wiring-harness/certs/ca.crt")
-    parser.add_argument("--ca-key", default=None,
-                        help="Path to CA private key. Default: ~/.config/wiring-harness/certs/ca.key")
-    parser.add_argument("--issued-dir", default=None,
-                        help="Directory to store issued client identity artifacts. "
-                             "Default: ~/.config/wiring-harness/certs/issued")
-    parser.add_argument("--output",
-                        help="Output .mobileconfig path. "
-                             f"Default: {DEFAULT_SHARE_TMP}/{SLUG_PREFIX}-<device>.mobileconfig")
-    parser.add_argument("--p12-output",
-                        help=f"Staged .p12 copy path. Default: {DEFAULT_SHARE_TMP}/{SLUG_PREFIX}-<device>.p12")
-    parser.add_argument("--owner", default=DEFAULT_OWNER,
-                        help=f"Owner for staged files. Default: {DEFAULT_OWNER}")
-    parser.add_argument("--group", default=DEFAULT_GROUP,
-                        help=f"Group for staged files. Default: {DEFAULT_GROUP}")
-    parser.add_argument("--organization", default=DEFAULT_ORGANIZATION,
-                        help=f"Organization string shown on iPhone. Default: {DEFAULT_ORGANIZATION}")
-    parser.add_argument("--profile-identifier-prefix", default=DEFAULT_PROFILE_IDENTIFIER_PREFIX,
-                        help=f"Profile identifier prefix. Default: {DEFAULT_PROFILE_IDENTIFIER_PREFIX}")
-    parser.add_argument("--profile-name",
-                        help="Human-readable profile name shown on iPhone.")
-    parser.add_argument("--identity-passphrase",
-                        help="Passphrase for PKCS#12 identity. Default: auto-generated.")
-    parser.add_argument("--rotate", action="store_true",
-                        help="Replace any existing identity for this device with a fresh one.")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Print actions without changing the host.")
-    return parser.parse_args()
+        fail("run as root so issued identity and staged files can be written safely")
 
 
 def slugify(name: str) -> str:
@@ -215,6 +197,36 @@ def stable_uuid(label: str, digest: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{label}:{digest}")).upper()
 
 
+def run_command(command: list[str], *, env: dict[str, str] | None = None) -> None:
+    try:
+        subprocess.run(command, check=True, capture_output=True, text=True, env=env)
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or str(exc)).strip()
+        fail(f"command failed: {' '.join(command)}: {detail}")
+
+
+# ---------------------------------------------------------------------------
+# Device registry
+# ---------------------------------------------------------------------------
+
+
+def load_devices(path: Path) -> list[DeviceSpec]:
+    data = tomllib.loads(path.read_text())
+    devices = []
+    for entry in data.get("devices", []):
+        devices.append(DeviceSpec(
+            name=entry["name"],
+            type=entry.get("type", "mobile"),
+            platform=entry.get("platform", "ios"),
+        ))
+    return devices
+
+
+# ---------------------------------------------------------------------------
+# Identity issuance
+# ---------------------------------------------------------------------------
+
+
 def build_identity_paths(
     device_name: str, issued_dir: Path, output: str | None, p12_output: str | None
 ) -> IdentityPaths:
@@ -240,14 +252,6 @@ def build_identity_paths(
         staged_profile_path=staged_profile,
         staged_p12_path=staged_p12,
     )
-
-
-def run_command(command: list[str], *, env: dict[str, str] | None = None) -> None:
-    try:
-        subprocess.run(command, check=True, capture_output=True, text=True, env=env)
-    except subprocess.CalledProcessError as exc:
-        detail = (exc.stderr or exc.stdout or str(exc)).strip()
-        fail(f"command failed: {' '.join(command)}: {detail}")
 
 
 def load_or_create_passphrase(
@@ -290,10 +294,7 @@ def ensure_client_identity(
     has_pass = identity.passphrase_path.exists()
 
     if any([has_cert, has_key, has_p12]) and (not all([has_cert, has_key, has_p12]) or not has_pass) and not rotate:
-        fail(
-            f"incomplete identity state under {identity.cert_path.parent}. "
-            "Re-run with --rotate or repair manually."
-        )
+        fail(f"incomplete identity state under {identity.cert_path.parent}. Re-run with --rotate or repair manually.")
     if all([has_cert, has_key, has_p12]) and has_pass and not rotate:
         return
 
@@ -301,7 +302,7 @@ def ensure_client_identity(
     ensure_directory(identity.cert_path.parent, 0o750, dry_run=dry_run)
 
     if dry_run:
-        log(f"would issue a fresh mTLS client identity for {device_name}")
+        log(f"  would issue a fresh mTLS client identity for {device_name}")
         return
 
     for path in (identity.cert_path, identity.key_path, identity.p12_path):
@@ -342,7 +343,96 @@ def ensure_client_identity(
         csr_path.unlink(missing_ok=True)
         ext_path.unlink(missing_ok=True)
 
-    log(f"issued mTLS client identity for {device_name}")
+    log(f"  issued mTLS client identity for {device_name}")
+
+
+# ---------------------------------------------------------------------------
+# Desktop delivery — NSS browser install
+# ---------------------------------------------------------------------------
+
+
+def _find_nss_databases(home: Path) -> list[Path]:
+    """Return existing NSS database directories for Firefox and Chromium."""
+    dbs: list[Path] = []
+
+    ff_roots = [
+        home / ".mozilla" / "firefox",
+        home / ".var" / "app" / "org.mozilla.firefox" / ".mozilla" / "firefox",
+    ]
+    for ff_root in ff_roots:
+        if not ff_root.is_dir():
+            continue
+        for child in ff_root.iterdir():
+            if child.is_dir() and (child.suffix in (".default", ".default-release", ".default-esr")
+                                    or child.name.endswith((".default", ".default-release", ".default-esr"))):
+                dbs.append(child)
+
+    chromium_db = home / ".pki" / "nssdb"
+    if chromium_db.is_dir():
+        dbs.append(chromium_db)
+
+    return dbs
+
+
+def _nss_remove_nick(db: str, nick: str) -> None:
+    """Remove all entries matching nick from an NSS database (handles duplicates)."""
+    for _ in range(10):
+        r = subprocess.run(["certutil", "-D", "-d", db, "-n", nick],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            break
+
+
+def install_to_nss(
+    *, ca_cert: Path, p12_path: Path, passphrase: str, device_name: str, home: Path, dry_run: bool
+) -> None:
+    """Install the CA trust and per-device identity into Firefox and Chromium NSS databases."""
+    if not shutil.which("certutil"):
+        log("  [NSS] certutil not found — install nss-tools (dnf install nss-tools)")
+        return
+    if not shutil.which("pk12util"):
+        log("  [NSS] pk12util not found — install nss-tools")
+        return
+
+    databases = _find_nss_databases(home)
+    if not databases:
+        log("  [NSS] no Firefox or Chromium NSS databases found")
+        return
+
+    identity_nick = f"Wiring Harness {device_name} Client"
+
+    for db_path in databases:
+        label = db_path.name
+        db = f"sql:{db_path}"
+
+        if dry_run:
+            log(f"  [NSS] would update {db_path}")
+            continue
+
+        # Pre-remove stale entries to avoid duplicate accumulation
+        for nick in [CA_NICK, identity_nick, f"{identity_nick} - Portfolio"]:
+            _nss_remove_nick(db, nick)
+
+        # CA trust
+        r = subprocess.run(["certutil", "-A", "-d", db, "-n", CA_NICK, "-t", "CT,,", "-i", str(ca_cert)],
+                           capture_output=True, text=True)
+        if r.returncode == 0:
+            log(f"  [NSS] CA trust added: {label}")
+        else:
+            log(f"  [NSS] CA trust failed ({label}): {r.stderr.strip()}")
+
+        # Per-device client identity
+        r = subprocess.run(["pk12util", "-i", str(p12_path), "-d", db, "-W", passphrase],
+                           capture_output=True, text=True)
+        if r.returncode == 0:
+            log(f"  [NSS] client identity added: {label}")
+        else:
+            log(f"  [NSS] client identity failed ({label}): {r.stderr.strip()}")
+
+
+# ---------------------------------------------------------------------------
+# Mobile delivery — mobileconfig staging
+# ---------------------------------------------------------------------------
 
 
 def build_mobileconfig(
@@ -392,17 +482,142 @@ def build_mobileconfig(
     return plistlib.dumps(profile, fmt=plistlib.FMT_XML, sort_keys=False)
 
 
+def stage_mobile_profile(
+    *,
+    ca_cert: Path,
+    identity: IdentityPaths,
+    device_name: str,
+    profile_identifier: str,
+    profile_name: str,
+    organization: str,
+    ownership: Ownership,
+    dry_run: bool,
+) -> None:
+    ca_cert_der = load_certificate_der(ca_cert)
+    p12_bytes = identity.p12_path.read_bytes()
+    mobileconfig = build_mobileconfig(
+        ca_cert_der=ca_cert_der, p12_bytes=p12_bytes,
+        profile_identifier=profile_identifier, profile_name=profile_name,
+        organization=organization, device_name=device_name,
+        p12_file_name=identity.p12_path.name, ca_cert_file_name=ca_cert.name,
+    )
+    write_file(identity.staged_profile_path, mobileconfig, 0o644, ownership, dry_run)
+    copy_file(identity.p12_path, identity.staged_p12_path, 0o640, ownership, dry_run)
+    log(f"  staged {identity.staged_profile_path.name}")
+    log(f"  staged {identity.staged_p12_path.name}")
+    log(f"  identity import password: {identity.passphrase_path.read_text().strip()}")
+    log("  install steps on iPhone:")
+    log(f"    1. Open {identity.staged_profile_path.name} from the snowbridge SMB share.")
+    log("    2. Settings → Profile Downloaded → Install.")
+    log("    3. Settings → General → About → Certificate Trust Settings → enable Wiring Harness CA.")
+
+
+# ---------------------------------------------------------------------------
+# Per-device orchestration
+# ---------------------------------------------------------------------------
+
+
+def export_device(
+    *,
+    device: DeviceSpec,
+    ca_cert: Path,
+    ca_key: Path,
+    issued_dir: Path,
+    ownership: Ownership,
+    profile_identifier_prefix: str,
+    organization: str,
+    rotate: bool,
+    dry_run: bool,
+    output: str | None = None,
+    p12_output: str | None = None,
+    passphrase_override: str | None = None,
+) -> None:
+    log(f"\n── {device.name} ({device.type}/{device.platform}) ──")
+    identity = build_identity_paths(device.name, issued_dir, output, p12_output)
+    passphrase = load_or_create_passphrase(
+        identity.passphrase_path, passphrase_override, rotate, dry_run
+    )
+    ensure_client_identity(
+        ca_cert=ca_cert, ca_key=ca_key, identity=identity,
+        device_name=device.name, passphrase=passphrase,
+        rotate=rotate, dry_run=dry_run,
+    )
+
+    if dry_run:
+        log(f"  would deliver for {device.type}")
+        return
+
+    profile_identifier = f"{profile_identifier_prefix}.{identity.slug}"
+    profile_name = f"Wiring Harness mTLS ({device.name})"
+
+    if device.type == "desktop":
+        install_to_nss(
+            ca_cert=ca_cert, p12_path=identity.p12_path, passphrase=passphrase,
+            device_name=device.name, home=_invoking_user_home(), dry_run=dry_run,
+        )
+    else:
+        stage_mobile_profile(
+            ca_cert=ca_cert, identity=identity, device_name=device.name,
+            profile_identifier=profile_identifier, profile_name=profile_name,
+            organization=organization, ownership=ownership, dry_run=dry_run,
+        )
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Generate per-device mTLS identity profiles for all registered devices.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
+
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--all-devices", action="store_true",
+                      help="Process all devices in devices.toml")
+    mode.add_argument("--device-name", metavar="NAME",
+                      help="Process a single device by name (must exist in devices.toml or be given --type)")
+
+    parser.add_argument("--devices", metavar="PATH", default=str(DEFAULT_DEVICES_TOML),
+                        help=f"Path to devices.toml (default: {DEFAULT_DEVICES_TOML})")
+    parser.add_argument("--type", choices=["desktop", "mobile"], default="mobile",
+                        help="Device type when --device-name is used and not in devices.toml (default: mobile)")
+    parser.add_argument("--platform", default="ios",
+                        help="Platform when --device-name is used and not in devices.toml (default: ios)")
+    parser.add_argument("--ca-cert", default=None,
+                        help="Path to CA certificate. Default: ~/.config/wiring-harness/certs/ca.crt")
+    parser.add_argument("--ca-key", default=None,
+                        help="Path to CA private key. Default: ~/.config/wiring-harness/certs/ca.key")
+    parser.add_argument("--issued-dir", default=None,
+                        help="Directory for issued client identities. Default: ~/.config/wiring-harness/certs/issued")
+    parser.add_argument("--output", help="Output .mobileconfig path (single device only)")
+    parser.add_argument("--p12-output", help="Staged .p12 path (single device only)")
+    parser.add_argument("--owner", default=DEFAULT_OWNER,
+                        help=f"Owner for staged mobile files. Default: {DEFAULT_OWNER}")
+    parser.add_argument("--group", default=DEFAULT_GROUP,
+                        help=f"Group for staged mobile files. Default: {DEFAULT_GROUP}")
+    parser.add_argument("--organization", default=DEFAULT_ORGANIZATION,
+                        help=f"Organization string in profiles. Default: {DEFAULT_ORGANIZATION}")
+    parser.add_argument("--profile-identifier-prefix", default=DEFAULT_PROFILE_IDENTIFIER_PREFIX,
+                        help=f"Profile identifier prefix. Default: {DEFAULT_PROFILE_IDENTIFIER_PREFIX}")
+    parser.add_argument("--identity-passphrase",
+                        help="Passphrase for PKCS#12 identity (single device only). Default: auto-generated.")
+    parser.add_argument("--rotate", action="store_true",
+                        help="Replace existing identities with freshly signed ones.")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Print actions without changing the host.")
+    return parser.parse_args()
+
+
 def main() -> int:
     args = parse_args()
-    device_name = args.device_name.strip()
-    slug = slugify(device_name)
-    profile_name = args.profile_name or f"Wiring Harness mTLS ({device_name})"
-    profile_identifier = f"{args.profile_identifier_prefix}.{slug}"
 
     ca_cert = Path(args.ca_cert).expanduser().resolve() if args.ca_cert else _default_ca_cert()
     ca_key = Path(args.ca_key).expanduser().resolve() if args.ca_key else _default_ca_key()
     issued_dir = Path(args.issued_dir).expanduser().resolve() if args.issued_dir else _default_issued_dir()
-    identity = build_identity_paths(device_name, issued_dir, args.output, args.p12_output)
     ownership = resolve_ownership(args.owner, args.group)
 
     try:
@@ -413,45 +628,44 @@ def main() -> int:
         if not ca_key.is_file():
             fail(f"CA private key not found: {ca_key}. Run scripts/setup-mtls.sh first.")
 
-        passphrase = load_or_create_passphrase(
-            identity.passphrase_path, args.identity_passphrase, args.rotate, args.dry_run
-        )
-        ensure_client_identity(
-            ca_cert=ca_cert, ca_key=ca_key, identity=identity,
-            device_name=device_name, passphrase=passphrase,
-            rotate=args.rotate, dry_run=args.dry_run,
-        )
+        devices_path = Path(args.devices)
 
-        if args.dry_run:
-            log(f"would stage {identity.staged_profile_path}")
-            log(f"would stage {identity.staged_p12_path}")
-            log(f"identity import password: {passphrase}")
-            return 0
-
-        ca_cert_der = load_certificate_der(ca_cert)
-        p12_bytes = identity.p12_path.read_bytes()
-        mobileconfig = build_mobileconfig(
-            ca_cert_der=ca_cert_der, p12_bytes=p12_bytes,
-            profile_identifier=profile_identifier, profile_name=profile_name,
-            organization=args.organization, device_name=device_name,
-            p12_file_name=identity.p12_path.name, ca_cert_file_name=ca_cert.name,
-        )
-
-        write_file(identity.staged_profile_path, mobileconfig, 0o644, ownership, args.dry_run)
-        copy_file(identity.p12_path, identity.staged_p12_path, 0o640, ownership, args.dry_run)
-
-        log(f"staged {identity.staged_profile_path}")
-        log(f"staged {identity.staged_p12_path}")
-        log(f"identity import password: {passphrase}")
-        log("next steps on iPhone:")
-        log(f"  1. Open {identity.staged_profile_path.name} from the snowbridge SMB share.")
-        log("  2. Settings → Profile Downloaded → Install.")
-        log("  3. Settings → General → About → Certificate Trust Settings → enable Wiring Harness CA.")
-        return 0
+        if args.all_devices:
+            if not devices_path.exists():
+                fail(f"devices.toml not found: {devices_path}")
+            devices = load_devices(devices_path)
+            if not devices:
+                fail("no devices found in devices.toml")
+            log(f"Processing {len(devices)} device(s) from {devices_path}")
+            for device in devices:
+                export_device(
+                    device=device, ca_cert=ca_cert, ca_key=ca_key, issued_dir=issued_dir,
+                    ownership=ownership, profile_identifier_prefix=args.profile_identifier_prefix,
+                    organization=args.organization, rotate=args.rotate, dry_run=args.dry_run,
+                )
+        else:
+            # Single device: look it up in devices.toml if it exists, else use CLI args
+            device = None
+            if devices_path.exists():
+                for d in load_devices(devices_path):
+                    if d.name == args.device_name:
+                        device = d
+                        break
+            if device is None:
+                device = DeviceSpec(name=args.device_name, type=args.type, platform=args.platform)
+            export_device(
+                device=device, ca_cert=ca_cert, ca_key=ca_key, issued_dir=issued_dir,
+                ownership=ownership, profile_identifier_prefix=args.profile_identifier_prefix,
+                organization=args.organization, rotate=args.rotate, dry_run=args.dry_run,
+                output=args.output, p12_output=args.p12_output,
+                passphrase_override=args.identity_passphrase,
+            )
 
     except SetupError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+
+    return 0
 
 
 if __name__ == "__main__":

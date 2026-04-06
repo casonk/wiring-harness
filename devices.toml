@@ -1,0 +1,23 @@
+# wiring-harness device registry
+#
+# Each [[devices]] entry receives its own per-device client certificate.
+# type = "desktop"  → cert installed to local browser NSS databases (Firefox, Chromium)
+# type = "mobile"   → mobileconfig + p12 staged to /srv/snowbridge/share/tmp/
+#
+# Run `sudo python3 scripts/export_mtls_profile.py --all-devices` to regenerate
+# profiles for every device in this file.
+
+[[devices]]
+name     = "fedora-desk"
+type     = "desktop"
+platform = "linux"
+
+[[devices]]
+name     = "iphone-13-mini"
+type     = "mobile"
+platform = "ios"
+
+[[devices]]
+name     = "iphone-14-pro"
+type     = "mobile"
+platform = "ios"
