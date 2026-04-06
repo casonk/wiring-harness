@@ -1,0 +1,9 @@
+# wiring-harness dnsmasq entries
+#
+# Install at /etc/dnsmasq.d/wiring-harness.conf on the WireGuard/dnsmasq server.
+# Generated with correct IPs by scripts/setup-mtls.sh — re-run to update.
+#
+# Replace 10.99.0.1 with the WireGuard server IP.
+
+address=/config.clockwork.internal/10.99.0.1
+address=/files.snowbridge.internal/10.99.0.1

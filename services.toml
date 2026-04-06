@@ -1,0 +1,30 @@
+# wiring-harness service registry
+#
+# Each [[services]] entry is one HTTPS site served by the shared Caddy instance.
+# All services share one server TLS cert (their hostnames become SANs).
+# Client auth uses per-service CAs: omit client_ca_path to use the shared
+# wiring-harness CA; set it explicitly for services with their own CA
+# (e.g. snowbridge generates its own client CA as part of its stack).
+#
+# Port resolution order:
+#   1. Explicit `port` field
+#   2. Read `port_env_key` from `env_file`
+#   3. `port_default` fallback
+#
+# Run `sudo python3 scripts/setup_caddy.py --provision` to apply.
+
+wg_ip = "10.99.0.1"
+
+[[services]]
+name        = "clockwork-web"
+hostname    = "config.clockwork.internal"
+port        = 5000
+
+[[services]]
+name             = "snowbridge-filebrowser"
+hostname         = "files.snowbridge.internal"
+port_env_key     = "FILEBROWSER_HTTP_PORT"
+port_default     = 8080
+env_file         = "~/../snowbridge/config/web/filebrowser/filebrowser.env.local"
+client_ca_path   = "/var/lib/snowbridge/caddy/data/mtls/client-ca.crt"
+proxy_headers    = {"X-Snowbridge-Auth-User" = "snowbridge"}
