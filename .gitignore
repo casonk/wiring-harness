@@ -7,3 +7,5 @@ __pycache__/
 config/caddy/Caddyfile.combined.local
 CHATHISTORY.md
 CLAUDE.md
+
+/REFS-LOCAL.md
