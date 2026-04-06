@@ -1,0 +1,20 @@
+[project]
+name = "wiring-harness"
+version = "0.1.0"
+description = "Shared Caddy, mTLS, and DNS provisioning for the home server portfolio."
+license = { text = "MIT" }
+requires-python = ">=3.11"
+
+[project.optional-dependencies]
+dev = ["ruff", "black"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+
+[tool.black]
+line-length = 120
+target-version = ["py311"]
