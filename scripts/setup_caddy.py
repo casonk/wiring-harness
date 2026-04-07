@@ -162,7 +162,6 @@ def _site_block(
         f"\treverse_proxy {proxy_target}{proxy_extra}\n"
         f"\n"
         f"\theader {{\n"
-        f'\t\tStrict-Transport-Security "max-age=31536000"\n'
         f'\t\tX-Content-Type-Options "nosniff"\n'
         f'\t\tX-Frame-Options "SAMEORIGIN"\n'
         f'\t\tReferrer-Policy "no-referrer"\n'
