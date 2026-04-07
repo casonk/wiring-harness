@@ -31,6 +31,7 @@ import ssl
 import subprocess
 import sys
 import tempfile
+import time
 import tomllib  # type: ignore[no-redef]
 import uuid
 from dataclasses import dataclass
@@ -383,6 +384,48 @@ def _nss_remove_nick(db: str, nick: str) -> None:
             break
 
 
+def _restart_browsers(user: str | None) -> None:
+    """Kill browsers (flushes NSS cache and socket pool) then relaunch Chromium as the user."""
+    browsers = ["chromium-browser", "chromium", "google-chrome", "firefox"]
+    killed: list[str] = []
+    for b in browsers:
+        r = subprocess.run(["pkill", "-x", b], capture_output=True)
+        if r.returncode == 0:
+            killed.append(b)
+    if killed:
+        log(f"  [browser] killed: {', '.join(killed)}")
+        time.sleep(2)
+
+    if not user:
+        log("  [browser] SUDO_USER not set — restart browser manually to pick up cert changes")
+        return
+
+    chromium = shutil.which("chromium-browser") or shutil.which("chromium") or shutil.which("google-chrome")
+    if not chromium:
+        log("  [browser] chromium not found — restart browser manually")
+        return
+
+    try:
+        uid = pwd.getpwnam(user).pw_uid
+        wayland = os.environ.get("WAYLAND_DISPLAY", "wayland-0")
+        subprocess.Popen(
+            [
+                "sudo", "-u", user, "env",
+                f"XDG_RUNTIME_DIR=/run/user/{uid}",
+                f"WAYLAND_DISPLAY={wayland}",
+                f"DISPLAY={os.environ.get('DISPLAY', ':0')}",
+                chromium,
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        log(f"  [browser] relaunched {chromium} as {user}")
+    except Exception as exc:
+        log(f"  [browser] relaunch failed ({exc}) — start {chromium} manually")
+
+
 def install_to_nss(
     *, ca_cert: Path, p12_path: Path, passphrase: str, device_name: str, home: Path, dry_run: bool
 ) -> None:
@@ -630,6 +673,8 @@ def main() -> int:
 
         devices_path = Path(args.devices)
 
+        has_desktop = False
+
         if args.all_devices:
             if not devices_path.exists():
                 fail(f"devices.toml not found: {devices_path}")
@@ -643,6 +688,8 @@ def main() -> int:
                     ownership=ownership, profile_identifier_prefix=args.profile_identifier_prefix,
                     organization=args.organization, rotate=args.rotate, dry_run=args.dry_run,
                 )
+                if device.type == "desktop":
+                    has_desktop = True
         else:
             # Single device: look it up in devices.toml if it exists, else use CLI args
             device = None
@@ -660,6 +707,12 @@ def main() -> int:
                 output=args.output, p12_output=args.p12_output,
                 passphrase_override=args.identity_passphrase,
             )
+            if device.type == "desktop":
+                has_desktop = True
+
+        if has_desktop and not args.dry_run:
+            log("\n==> Restarting browsers to pick up NSS changes...")
+            _restart_browsers(os.environ.get("SUDO_USER"))
 
     except SetupError as exc:
         print(f"error: {exc}", file=sys.stderr)

@@ -8,9 +8,15 @@
 # the end of this script.  Re-run any time the WireGuard IP or service list changes.
 #
 # Usage:
-#   bash scripts/setup-mtls.sh
+#   bash scripts/setup-mtls.sh            # install/re-provision; skip cert generation if certs exist
+#   bash scripts/setup-mtls.sh --rotate   # force-regenerate all certs (new CA, new server, new clients)
 #   WH_WG_IP=10.99.0.1 bash scripts/setup-mtls.sh
 set -euo pipefail
+
+ROTATE=0
+for arg in "$@"; do
+  case "$arg" in --rotate) ROTATE=1 ;; esac
+done
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CERT_DIR="${WH_CERT_DIR:-$HOME/.config/wiring-harness/certs}"
@@ -37,60 +43,67 @@ echo "  SAN IP: $WG_IP"
 
 PRIMARY_HOSTNAME=$(echo "$HOSTNAMES" | head -1)
 
-# ── 1. CA ──────────────────────────────────────────────────────────────────────
-echo "==> Generating CA (valid ${DAYS_CA} days)..."
-openssl genrsa -out "$CERT_DIR/ca.key" 4096
-openssl req -new -x509 -days "$DAYS_CA" \
-  -key "$CERT_DIR/ca.key" \
-  -out "$CERT_DIR/ca.crt" \
-  -subj "/CN=Wiring Harness CA/O=Portfolio/OU=Infrastructure"
+# ── 1–4. Cert generation (skipped if certs exist; use --rotate to force) ───────
+if [ "$ROTATE" -eq 1 ] || [ ! -f "$CERT_DIR/ca.crt" ]; then
+  if [ "$ROTATE" -eq 1 ]; then
+    echo "==> --rotate: regenerating all certificates..."
+  else
+    echo "==> No existing certs found — generating fresh PKI..."
+  fi
 
-# ── 2. Server cert ─────────────────────────────────────────────────────────────
-echo "==> Generating server certificate (valid ${DAYS_LEAF} days)..."
-openssl genrsa -out "$CERT_DIR/server.key" 2048
-openssl req -new \
-  -key "$CERT_DIR/server.key" \
-  -out "$CERT_DIR/server.csr" \
-  -subj "/CN=${PRIMARY_HOSTNAME}/O=Wiring Harness/OU=Server"
-openssl x509 -req -days "$DAYS_LEAF" \
-  -in "$CERT_DIR/server.csr" \
-  -CA "$CERT_DIR/ca.crt" -CAkey "$CERT_DIR/ca.key" -CAcreateserial \
-  -extfile <(printf "%s" "$SAN_VALUE") \
-  -out "$CERT_DIR/server.crt"
-rm -f "$CERT_DIR/server.csr"
+  # 1. CA
+  openssl genrsa -out "$CERT_DIR/ca.key" 4096
+  openssl req -new -x509 -days "$DAYS_CA" \
+    -key "$CERT_DIR/ca.key" \
+    -out "$CERT_DIR/ca.crt" \
+    -subj "/CN=Wiring Harness CA/O=Portfolio/OU=Infrastructure"
 
-# ── 3. Shared client cert (desktop fallback) ───────────────────────────────────
-# Per-device certs are issued by export_mtls_profile.py.
-# This shared cert is kept for manual use / desktop fallback.
-echo "==> Generating shared client certificate (valid ${DAYS_LEAF} days)..."
-openssl genrsa -out "$CERT_DIR/client.key" 2048
-openssl req -new \
-  -key "$CERT_DIR/client.key" \
-  -out "$CERT_DIR/client.csr" \
-  -subj "/CN=wiring-harness-client/O=Portfolio/OU=Admin"
-openssl x509 -req -days "$DAYS_LEAF" \
-  -in "$CERT_DIR/client.csr" \
-  -CA "$CERT_DIR/ca.crt" -CAkey "$CERT_DIR/ca.key" -CAcreateserial \
-  -extfile <(printf "basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=clientAuth\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid,issuer\n") \
-  -out "$CERT_DIR/client.crt"
-rm -f "$CERT_DIR/client.csr"
+  # 2. Server cert
+  openssl genrsa -out "$CERT_DIR/server.key" 2048
+  openssl req -new \
+    -key "$CERT_DIR/server.key" \
+    -out "$CERT_DIR/server.csr" \
+    -subj "/CN=${PRIMARY_HOSTNAME}/O=Wiring Harness/OU=Server"
+  openssl x509 -req -days "$DAYS_LEAF" \
+    -in "$CERT_DIR/server.csr" \
+    -CA "$CERT_DIR/ca.crt" -CAkey "$CERT_DIR/ca.key" -CAcreateserial \
+    -extfile <(printf "%s" "$SAN_VALUE") \
+    -out "$CERT_DIR/server.crt"
+  rm -f "$CERT_DIR/server.csr"
 
-# ── 4. PKCS12 bundle (shared cert) ────────────────────────────────────────────
-echo "==> Bundling shared client cert as PKCS12..."
-P12_PASS_FILE="$CERT_DIR/client.p12.passphrase"
-if [ ! -f "$P12_PASS_FILE" ]; then
-  openssl rand -base64 24 > "$P12_PASS_FILE"
-  chmod 600 "$P12_PASS_FILE"
+  # 3. Shared client cert (desktop fallback — per-device certs issued by export_mtls_profile.py)
+  openssl genrsa -out "$CERT_DIR/client.key" 2048
+  openssl req -new \
+    -key "$CERT_DIR/client.key" \
+    -out "$CERT_DIR/client.csr" \
+    -subj "/CN=wiring-harness-client/O=Portfolio/OU=Admin"
+  openssl x509 -req -days "$DAYS_LEAF" \
+    -in "$CERT_DIR/client.csr" \
+    -CA "$CERT_DIR/ca.crt" -CAkey "$CERT_DIR/ca.key" -CAcreateserial \
+    -extfile <(printf "basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=clientAuth\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid,issuer\n") \
+    -out "$CERT_DIR/client.crt"
+  rm -f "$CERT_DIR/client.csr"
+
+  # 4. PKCS12 bundle (shared cert)
+  P12_PASS_FILE="$CERT_DIR/client.p12.passphrase"
+  if [ ! -f "$P12_PASS_FILE" ]; then
+    openssl rand -base64 24 > "$P12_PASS_FILE"
+    chmod 600 "$P12_PASS_FILE"
+  fi
+  P12_PASS="$(cat "$P12_PASS_FILE")"
+  openssl pkcs12 -export \
+    -out "$CERT_DIR/client.p12" \
+    -inkey "$CERT_DIR/client.key" \
+    -in "$CERT_DIR/client.crt" \
+    -certfile "$CERT_DIR/ca.crt" \
+    -passout pass:"$P12_PASS"
+
+  chmod 600 "$CERT_DIR"/*.key "$CERT_DIR"/*.p12
+  echo "==> Certificates written to $CERT_DIR"
+else
+  echo "==> Existing certs found — skipping generation (use --rotate to regenerate)"
+  echo "    CA: $CERT_DIR/ca.crt ($(openssl x509 -noout -enddate -in "$CERT_DIR/ca.crt" 2>/dev/null | cut -d= -f2))"
 fi
-P12_PASS="$(cat "$P12_PASS_FILE")"
-openssl pkcs12 -export \
-  -out "$CERT_DIR/client.p12" \
-  -inkey "$CERT_DIR/client.key" \
-  -in "$CERT_DIR/client.crt" \
-  -certfile "$CERT_DIR/ca.crt" \
-  -passout pass:"$P12_PASS"
-
-chmod 600 "$CERT_DIR"/*.key "$CERT_DIR"/*.p12
 
 # ── 5. /etc/hosts entries ──────────────────────────────────────────────────────
 echo "==> Checking /etc/hosts..."
