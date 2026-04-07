@@ -340,6 +340,11 @@ def ensure_client_identity(
         os.chmod(identity.key_path, 0o600)
         os.chmod(identity.cert_path, 0o644)
         os.chmod(identity.p12_path, 0o600)
+        _chown_to_invoking_user([
+            identity.cert_path, identity.key_path,
+            identity.p12_path, identity.passphrase_path,
+            identity.cert_path.parent,
+        ])
     finally:
         csr_path.unlink(missing_ok=True)
         ext_path.unlink(missing_ok=True)
@@ -384,12 +389,28 @@ def _nss_remove_nick(db: str, nick: str) -> None:
             break
 
 
+def _chown_to_invoking_user(paths: list[Path]) -> None:
+    """Return ownership of issued files to the original (non-root) user after sudo."""
+    sudo_user = os.environ.get("SUDO_USER")
+    if not sudo_user:
+        return
+    try:
+        pw = pwd.getpwnam(sudo_user)
+        for path in paths:
+            if path.exists():
+                os.chown(path, pw.pw_uid, pw.pw_gid)
+    except (KeyError, PermissionError):
+        pass
+
+
 def _restart_browsers(user: str | None) -> None:
     """Kill browsers (flushes NSS cache and socket pool) then relaunch Chromium as the user."""
+    # Use -f (full command line) not -x (comm field) — comm is capped at 15 chars on Linux
+    # so names like "chromium-browser" (16 chars) would silently not match with -x.
     browsers = ["chromium-browser", "chromium", "google-chrome", "firefox"]
     killed: list[str] = []
     for b in browsers:
-        r = subprocess.run(["pkill", "-x", b], capture_output=True)
+        r = subprocess.run(["pkill", "-f", b], capture_output=True)
         if r.returncode == 0:
             killed.append(b)
     if killed:
