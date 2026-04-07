@@ -41,6 +41,16 @@ sudo python3 scripts/export_mtls_profile.py --device-name iphone
 5. Per-device mobileconfigs are staged to `/srv/snowbridge/share/tmp/` for
    easy distribution via the snowbridge SMB share.
 
+## Local CI Verification
+
+Run before every push:
+
+```bash
+pre-commit run --all-files
+```
+
+Do not push changes that have not passed all checks locally.
+
 ## Agent Memory
 
 Use `./LESSONSLEARNED.md` as the tracked durable lessons file for this repo.
