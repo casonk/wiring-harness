@@ -33,7 +33,19 @@ mkdir -p "$CERT_DIR"
 chmod 700 "$CERT_DIR"
 
 # ── Derive SANs from services.toml ─────────────────────────────────────────────
-HOSTNAMES=$(grep -oP '(?<=hostname\s{0,5}=\s{0,5}")([^"]+)' "$REPO_ROOT/services.toml" 2>/dev/null || true)
+HOSTNAMES=$(python3 - "$REPO_ROOT/services.toml" <<'PYEOF'
+import sys
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
+data = tomllib.loads(open(sys.argv[1], "rb").read())
+for svc in data.get("services", []):
+    h = svc.get("hostname", "").strip()
+    if h:
+        print(h)
+PYEOF
+)
 if [ -z "$HOSTNAMES" ]; then
   echo "warning: no hostnames found in services.toml — using defaults" >&2
   HOSTNAMES="wiring-harness.internal"
