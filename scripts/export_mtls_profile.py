@@ -358,7 +358,12 @@ def ensure_client_identity(
 
 
 def _find_nss_databases(home: Path) -> list[Path]:
-    """Return existing NSS database directories for Firefox and Chromium."""
+    """Return NSS database directories for Firefox, Chromium, and Google Chrome.
+
+    The shared ~/.pki/nssdb is used by both Chromium and Google Chrome on Linux.
+    It is created here if absent so certutil can populate it before the browser
+    has been launched for the first time.
+    """
     dbs: list[Path] = []
 
     ff_roots = [
@@ -373,7 +378,16 @@ def _find_nss_databases(home: Path) -> list[Path]:
                                     or child.name.endswith((".default", ".default-release", ".default-esr"))):
                 dbs.append(child)
 
+    # Shared NSS store used by both Chromium and Google Chrome on Linux.
+    # Create it if missing so certutil can initialise it before first browser launch.
     chromium_db = home / ".pki" / "nssdb"
+    if not chromium_db.is_dir():
+        if shutil.which("certutil"):
+            chromium_db.mkdir(parents=True, exist_ok=True)
+            subprocess.run(
+                ["certutil", "-N", "-d", f"sql:{chromium_db}", "--empty-password"],
+                capture_output=True,
+            )
     if chromium_db.is_dir():
         dbs.append(chromium_db)
 
