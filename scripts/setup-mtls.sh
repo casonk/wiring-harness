@@ -39,7 +39,8 @@ try:
     import tomllib
 except ModuleNotFoundError:
     import tomli as tomllib
-data = tomllib.loads(open(sys.argv[1], "rb").read())
+with open(sys.argv[1], "rb") as _f:
+    data = tomllib.load(_f)
 for svc in data.get("services", []):
     h = svc.get("hostname", "").strip()
     if h:
