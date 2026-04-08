@@ -8,14 +8,19 @@
 # the end of this script.  Re-run any time the WireGuard IP or service list changes.
 #
 # Usage:
-#   bash scripts/setup-mtls.sh            # install/re-provision; skip cert generation if certs exist
-#   bash scripts/setup-mtls.sh --rotate   # force-regenerate all certs (new CA, new server, new clients)
+#   bash scripts/setup-mtls.sh                   # install/re-provision; skip cert gen if certs exist
+#   bash scripts/setup-mtls.sh --refresh-server  # regenerate server cert only (new SANs, same CA/clients)
+#   bash scripts/setup-mtls.sh --rotate          # force-regenerate all certs (new CA, server, clients)
 #   WH_WG_IP=10.99.0.1 bash scripts/setup-mtls.sh
 set -euo pipefail
 
 ROTATE=0
+REFRESH_SERVER=0
 for arg in "$@"; do
-  case "$arg" in --rotate) ROTATE=1 ;; esac
+  case "$arg" in
+    --rotate)         ROTATE=1 ;;
+    --refresh-server) REFRESH_SERVER=1 ;;
+  esac
 done
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -43,7 +48,23 @@ echo "  SAN IP: $WG_IP"
 
 PRIMARY_HOSTNAME=$(echo "$HOSTNAMES" | head -1)
 
-# ── 1–4. Cert generation (skipped if certs exist; use --rotate to force) ───────
+# ── Shared: generate server cert signed by existing CA ────────────────────────
+_gen_server_cert() {
+  openssl genrsa -out "$CERT_DIR/server.key" 2048
+  openssl req -new \
+    -key "$CERT_DIR/server.key" \
+    -out "$CERT_DIR/server.csr" \
+    -subj "/CN=${PRIMARY_HOSTNAME}/O=Wiring Harness/OU=Server"
+  openssl x509 -req -days "$DAYS_LEAF" \
+    -in "$CERT_DIR/server.csr" \
+    -CA "$CERT_DIR/ca.crt" -CAkey "$CERT_DIR/ca.key" -CAcreateserial \
+    -extfile <(printf "%s" "$SAN_VALUE") \
+    -out "$CERT_DIR/server.crt"
+  rm -f "$CERT_DIR/server.csr"
+  echo "  server.crt SANs: $SAN_VALUE"
+}
+
+# ── 1–4. Cert generation ───────────────────────────────────────────────────────
 if [ "$ROTATE" -eq 1 ] || [ ! -f "$CERT_DIR/ca.crt" ]; then
   if [ "$ROTATE" -eq 1 ]; then
     echo "==> --rotate: regenerating all certificates..."
@@ -59,17 +80,7 @@ if [ "$ROTATE" -eq 1 ] || [ ! -f "$CERT_DIR/ca.crt" ]; then
     -subj "/CN=Wiring Harness CA/O=Portfolio/OU=Infrastructure"
 
   # 2. Server cert
-  openssl genrsa -out "$CERT_DIR/server.key" 2048
-  openssl req -new \
-    -key "$CERT_DIR/server.key" \
-    -out "$CERT_DIR/server.csr" \
-    -subj "/CN=${PRIMARY_HOSTNAME}/O=Wiring Harness/OU=Server"
-  openssl x509 -req -days "$DAYS_LEAF" \
-    -in "$CERT_DIR/server.csr" \
-    -CA "$CERT_DIR/ca.crt" -CAkey "$CERT_DIR/ca.key" -CAcreateserial \
-    -extfile <(printf "%s" "$SAN_VALUE") \
-    -out "$CERT_DIR/server.crt"
-  rm -f "$CERT_DIR/server.csr"
+  _gen_server_cert
 
   # 3. Shared client cert (desktop fallback — per-device certs issued by export_mtls_profile.py)
   openssl genrsa -out "$CERT_DIR/client.key" 2048
@@ -100,6 +111,13 @@ if [ "$ROTATE" -eq 1 ] || [ ! -f "$CERT_DIR/ca.crt" ]; then
 
   chmod 600 "$CERT_DIR"/*.key "$CERT_DIR"/*.p12
   echo "==> Certificates written to $CERT_DIR"
+
+elif [ "$REFRESH_SERVER" -eq 1 ]; then
+  echo "==> --refresh-server: regenerating server cert with current SANs (CA and client certs unchanged)..."
+  _gen_server_cert
+  chmod 600 "$CERT_DIR/server.key"
+  echo "==> Server cert refreshed"
+
 else
   echo "==> Existing certs found — skipping generation (use --rotate to regenerate)"
   echo "    CA: $CERT_DIR/ca.crt ($(openssl x509 -noout -enddate -in "$CERT_DIR/ca.crt" 2>/dev/null | cut -d= -f2))"
