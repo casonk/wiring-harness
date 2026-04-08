@@ -21,6 +21,11 @@ hostname    = "config.clockwork.internal"
 port        = 5000
 
 [[services]]
+name     = "tachometer-dashboard"
+hostname = "tachometer.internal"
+port     = 5100
+
+[[services]]
 name             = "snowbridge-filebrowser"
 hostname         = "files.snowbridge.internal"
 port_env_key     = "FILEBROWSER_HTTP_PORT"
