@@ -46,6 +46,9 @@ DEFAULT_USER_CERTS_DIR = Path.home() / ".config" / "wiring-harness" / "certs"
 DEFAULT_SYSTEM_CERTS_DIR = Path("/etc/caddy/certs/wiring-harness")
 DEFAULT_OUTPUT = REPO_ROOT / "config" / "caddy" / "Caddyfile.combined.local"
 SYSTEM_CADDYFILE = Path("/etc/caddy/Caddyfile")
+HOSTS_FILE = Path("/etc/hosts")
+HOSTS_MARKER_BEGIN = "# wiring-harness BEGIN"
+HOSTS_MARKER_END = "# wiring-harness END"
 
 
 # ---------------------------------------------------------------------------
@@ -89,6 +92,38 @@ def _caddy_gid() -> int | None:
         return grp.getgrnam("caddy").gr_gid
     except (KeyError, ImportError):
         return None
+
+
+def _update_hosts(hostnames: list[str]) -> None:
+    """Maintain a wiring-harness managed block in /etc/hosts."""
+    text = HOSTS_FILE.read_text()
+    lines = text.splitlines(keepends=True)
+
+    # Strip any existing managed block
+    out: list[str] = []
+    inside = False
+    for line in lines:
+        stripped = line.rstrip("\n")
+        if stripped == HOSTS_MARKER_BEGIN:
+            inside = True
+            continue
+        if stripped == HOSTS_MARKER_END:
+            inside = False
+            continue
+        if not inside:
+            out.append(line)
+
+    # Ensure file ends with a newline before appending
+    if out and not out[-1].endswith("\n"):
+        out[-1] += "\n"
+
+    # Append new managed block
+    block: list[str] = [HOSTS_MARKER_BEGIN + "\n"]
+    for h in hostnames:
+        block.append(f"127.0.0.1 {h}\n")
+    block.append(HOSTS_MARKER_END + "\n")
+
+    HOSTS_FILE.write_text("".join(out + block))
 
 
 def _parse_env_file(path: Path) -> dict[str, str]:
@@ -258,7 +293,12 @@ def provision(*, services_data: dict, user_certs_dir: Path) -> int:
     elif rc_se != 127:
         print(f"warning: restorecon failed: {out_se}", file=sys.stderr)
 
-    # ── 5. Generate and write /etc/caddy/Caddyfile ────────────────────────────
+    # ── 5. Update /etc/hosts managed block ───────────────────────────────────
+    hostnames = [svc["hostname"] for svc in services]
+    _update_hosts(hostnames)
+    print(f"  updated {HOSTS_FILE} ({len(hostnames)} entries)")
+
+    # ── 6. Generate and write /etc/caddy/Caddyfile ────────────────────────────
     content = generate_caddyfile(services, DEFAULT_SYSTEM_CERTS_DIR, home)
     SYSTEM_CADDYFILE.write_text(content)
     print(f"  wrote {SYSTEM_CADDYFILE}")
@@ -267,21 +307,21 @@ def provision(*, services_data: dict, user_certs_dir: Path) -> int:
     DEFAULT_OUTPUT.write_text(content)
     print(f"  wrote reference copy: {DEFAULT_OUTPUT}")
 
-    # ── 6. Validate ───────────────────────────────────────────────────────────
+    # ── 7. Validate ───────────────────────────────────────────────────────────
     rc, out = _run(["caddy", "validate", "--config", str(SYSTEM_CADDYFILE)])
     if rc != 0:
         print(f"error: caddy validate failed:\n{out}", file=sys.stderr)
         return 1
     print("  caddy validate: ok")
 
-    # ── 7. Restart Caddy ──────────────────────────────────────────────────────
+    # ── 8. Restart Caddy ──────────────────────────────────────────────────────
     rc, out = _run(["systemctl", "restart", "caddy"], timeout=120)
     if rc != 0:
         print(f"error: systemctl restart caddy failed:\n{out}", file=sys.stderr)
         return 1
     print("  systemctl restart caddy: ok")
 
-    # ── 8. Enable user lingering ──────────────────────────────────────────────
+    # ── 9. Enable user lingering ──────────────────────────────────────────────
     sudo_user = _invoking_user()
     if sudo_user:
         rc_l, out_l = _run(["loginctl", "enable-linger", sudo_user])
