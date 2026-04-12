@@ -1,14 +1,30 @@
 # services.example.toml — template for services.local.toml
 #
-# Copy this file to services.local.toml and fill in the real paths for your
+# Copy this file to services.local.toml and fill in real values for your
 # machine.  services.local.toml is gitignored and never committed.
 #
 # setup_caddy.py automatically merges services.local.toml on top of
-# services.toml, matching entries by `name`.  Only include the fields that
-# differ from the committed defaults.
+# services.toml, matching entries by `name`.
 
-# Example: snowbridge-filebrowser needs two machine-specific paths.
+wg_ip = "<wireguard-server-ip>"
+
 [[services]]
-name           = "snowbridge-filebrowser"
-env_file       = "~/../<service-repo>/config/<path-to>.env.local"
+name     = "my-app"
+hostname = "app.home.internal"
+port     = 3000
+
+# Service whose port is read from an env file:
+[[services]]
+name         = "my-service"
+hostname     = "service.home.internal"
+port_env_key = "SERVICE_PORT"
+port_default = 8080
+env_file     = "~/../<service-repo>/config/<path>.env.local"
+
+# Service with its own client CA and custom proxy headers:
+[[services]]
+name           = "my-secure-service"
+hostname       = "secure.home.internal"
+port           = 9000
 client_ca_path = "/var/lib/<service-repo>/caddy/data/mtls/client-ca.crt"
+proxy_headers  = {"X-Custom-Header" = "value"}
