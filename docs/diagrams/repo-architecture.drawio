@@ -1,0 +1,61 @@
+<mxfile host="app.diagrams.net" modified="2026-04-11T00:00:00.000Z" agent="Codex" version="24.7.17">
+  <diagram id="repo-architecture" name="Page-1">
+    <mxGraphModel dx="1200" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1100" pageHeight="850" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="operator" value="Operator" style="rounded=1;whiteSpace=wrap;html=1;overflow=hidden;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="40" y="230" width="120" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="registry" value="services.toml&#xa;service registry" style="rounded=1;whiteSpace=wrap;html=1;overflow=hidden;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="230" y="60" width="180" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="mtls" value="setup-mtls.sh&#xa;CA + server cert + mobileconfig" style="rounded=1;whiteSpace=wrap;html=1;overflow=hidden;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="220" y="180" width="220" height="82" as="geometry"/>
+        </mxCell>
+        <mxCell id="caddy" value="setup_caddy.py&#xa;render + provision shared Caddy" style="rounded=1;whiteSpace=wrap;html=1;overflow=hidden;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="220" y="320" width="220" height="82" as="geometry"/>
+        </mxCell>
+        <mxCell id="export" value="export_mtls_profile.py&#xa;per-device client identities" style="rounded=1;whiteSpace=wrap;html=1;overflow=hidden;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="220" y="460" width="220" height="82" as="geometry"/>
+        </mxCell>
+        <mxCell id="artifacts" value="Generated artifacts&#xa;certs, mobileconfigs, dnsmasq snippets" style="rounded=1;whiteSpace=wrap;html=1;overflow=hidden;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="560" y="120" width="230" height="82" as="geometry"/>
+        </mxCell>
+        <mxCell id="ingress" value="Shared Caddy ingress&#xa;80/443 + mTLS" style="rounded=1;whiteSpace=wrap;html=1;overflow=hidden;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
+          <mxGeometry x="560" y="300" width="180" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="backends" value="Backend services&#xa;clockwork, intake, snowbridge, tachometer" style="rounded=1;whiteSpace=wrap;html=1;overflow=hidden;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="830" y="300" width="230" height="82" as="geometry"/>
+        </mxCell>
+        <mxCell id="e1" value="declare services" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="operator" target="registry">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e2" value="hostnames + ports + CA overrides" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="registry" target="caddy">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e3" value="refresh trust material" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="operator" target="mtls">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e4" value="issue device profiles" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="operator" target="export">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e5" value="write certs + profiles" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="mtls" target="artifacts">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e6" value="stage per-device bundles" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="export" target="artifacts">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e7" value="install config + restart" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="caddy" target="ingress">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e8" value="reverse proxy" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="ingress" target="backends">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e9" value="shared server certificate" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="mtls" target="ingress">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
