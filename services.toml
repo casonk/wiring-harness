@@ -12,28 +12,6 @@
 #   3. `port_default` fallback
 #
 # Run `sudo python3 scripts/setup_caddy.py --provision` to apply.
-
-wg_ip = "10.99.0.1"
-
-[[services]]
-name        = "clockwork-web"
-hostname    = "config.clockwork.internal"
-port        = 5000
-
-[[services]]
-name     = "tachometer-dashboard"
-hostname = "tachometer.internal"
-port     = 5100
-
-[[services]]
-name     = "intake-reports"
-hostname = "receipts.intake.internal"
-port     = 5200
-
-[[services]]
-name             = "snowbridge-filebrowser"
-hostname         = "files.snowbridge.internal"
-port_env_key     = "FILEBROWSER_HTTP_PORT"
-port_default     = 8080
-proxy_headers    = {"X-Snowbridge-Auth-User" = "snowbridge"}
-# env_file and client_ca_path are machine-specific — set them in services.local.toml (gitignored).
+#
+# Hostnames, IPs, and all service entries are personal — keep them in
+# services.local.toml (gitignored). See services.example.toml for the format.
