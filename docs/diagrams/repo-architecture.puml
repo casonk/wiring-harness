@@ -1,0 +1,28 @@
+@startuml
+!pragma layout elk
+title wiring-harness repository architecture
+
+actor "Operator" as operator
+file "services.toml\nservice registry" as registry
+
+rectangle "wiring-harness" {
+  component "setup-mtls.sh\nCA + server cert + mobileconfig" as mtls
+  component "setup_caddy.py\nrender + provision shared Caddy" as caddy
+  component "export_mtls_profile.py\nper-device client identities" as export
+}
+
+cloud "Shared Caddy ingress\n80/443 + mTLS" as ingress
+collections "Backend services\nclockwork, intake, snowbridge, tachometer" as backends
+database "Generated artifacts\ncerts, mobileconfigs, dnsmasq snippets" as artifacts
+
+operator --> registry : declare services
+registry --> caddy : hostnames + ports + CA overrides
+operator --> mtls : refresh trust material
+operator --> export : issue device profiles
+mtls --> artifacts : write certs + profiles
+export --> artifacts : stage per-device bundles
+caddy --> ingress : install config + restart
+ingress --> backends : reverse proxy
+mtls --> ingress : shared server certificate
+
+@enduml
