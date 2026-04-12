@@ -1,0 +1,7 @@
+@startuml packages_wiring-harness
+set namespaceSeparator none
+top to bottom direction
+skinparam componentStyle rectangle
+rectangle "export_mtls_profile\n1 python file" as export_mtls_profile
+rectangle "setup_caddy\n1 python file" as setup_caddy
+@enduml
