@@ -1,0 +1,14 @@
+# services.example.toml — template for services.local.toml
+#
+# Copy this file to services.local.toml and fill in the real paths for your
+# machine.  services.local.toml is gitignored and never committed.
+#
+# setup_caddy.py automatically merges services.local.toml on top of
+# services.toml, matching entries by `name`.  Only include the fields that
+# differ from the committed defaults.
+
+# Example: snowbridge-filebrowser needs two machine-specific paths.
+[[services]]
+name           = "snowbridge-filebrowser"
+env_file       = "~/../<service-repo>/config/<path-to>.env.local"
+client_ca_path = "/var/lib/<service-repo>/caddy/data/mtls/client-ca.crt"

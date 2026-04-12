@@ -50,6 +50,11 @@ DEFAULT_ORGANIZATION = "wiring-harness"
 SLUG_PREFIX = "wiring-harness-mtls"
 
 CA_NICK = "Wiring Harness CA"
+LEGACY_NSS_NICKS = (
+    "Clockwork CA",
+    "clockwork-client",
+    "clockwork-client - Portfolio",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -212,7 +217,24 @@ def run_command(command: list[str], *, env: dict[str, str] | None = None) -> Non
 
 
 def load_devices(path: Path) -> list[DeviceSpec]:
+    """Load devices.toml and merge devices.local.toml entries if present.
+
+    The local file is resolved as <stem>.local.toml alongside the main file
+    (e.g. devices.local.toml next to devices.toml).  Entries are matched by
+    ``name``; unknown names are appended as new devices.
+    """
     data = tomllib.loads(path.read_text())
+    local_path = path.with_name(path.stem + ".local.toml")
+    if local_path.exists():
+        local = tomllib.loads(local_path.read_text())
+        local_by_name = {e["name"]: e for e in local.get("devices", [])}
+        base_by_name = {e["name"]: e for e in data.get("devices", [])}
+        for name, overrides in local_by_name.items():
+            if name in base_by_name:
+                base_by_name[name].update(overrides)
+            else:
+                data.setdefault("devices", []).append(overrides)
+
     devices = []
     for entry in data.get("devices", []):
         devices.append(DeviceSpec(
@@ -381,13 +403,12 @@ def _find_nss_databases(home: Path) -> list[Path]:
     # Shared NSS store used by both Chromium and Google Chrome on Linux.
     # Create it if missing so certutil can initialise it before first browser launch.
     chromium_db = home / ".pki" / "nssdb"
-    if not chromium_db.is_dir():
-        if shutil.which("certutil"):
-            chromium_db.mkdir(parents=True, exist_ok=True)
-            subprocess.run(
-                ["certutil", "-N", "-d", f"sql:{chromium_db}", "--empty-password"],
-                capture_output=True,
-            )
+    if not chromium_db.is_dir() and shutil.which("certutil"):
+        chromium_db.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            ["certutil", "-N", "-d", f"sql:{chromium_db}", "--empty-password"],
+            capture_output=True,
+        )
     if chromium_db.is_dir():
         dbs.append(chromium_db)
 
@@ -487,8 +508,9 @@ def install_to_nss(
             log(f"  [NSS] would update {db_path}")
             continue
 
-        # Pre-remove stale entries to avoid duplicate accumulation
-        for nick in [CA_NICK, identity_nick, f"{identity_nick} - Portfolio"]:
+        # Pre-remove stale entries to avoid duplicate accumulation. Also purge
+        # legacy clockwork nicknames left behind before shared-Caddy migration.
+        for nick in [CA_NICK, identity_nick, f"{identity_nick} - Portfolio", *LEGACY_NSS_NICKS]:
             _nss_remove_nick(db, nick)
 
         # CA trust
