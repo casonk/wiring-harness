@@ -56,6 +56,32 @@ HOSTS_MARKER_END = "# wiring-harness END"
 # ---------------------------------------------------------------------------
 
 
+def _load_services_data(services_path: Path) -> dict:
+    """Load services.toml and merge services.local.toml overrides if present.
+
+    The local file is resolved as <stem>.local.toml alongside the main file
+    (e.g. services.local.toml next to services.toml).  Entries are matched by
+    ``name``; unknown names are appended as new services.
+    """
+    data = tomllib.loads(services_path.read_text())
+    local_path = services_path.with_name(services_path.stem + ".local.toml")
+    if not local_path.exists():
+        return data
+
+    local = tomllib.loads(local_path.read_text())
+    for k, v in local.items():
+        if k != "services":
+            data[k] = v
+    local_by_name = {s["name"]: s for s in local.get("services", [])}
+    base_by_name = {s["name"]: s for s in data.get("services", [])}
+    for name, overrides in local_by_name.items():
+        if name in base_by_name:
+            base_by_name[name].update(overrides)
+        else:
+            data.setdefault("services", []).append(overrides)
+    return data
+
+
 def _run(cmd: list[str], timeout: int = 30) -> tuple[int, str]:
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
@@ -369,7 +395,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: services.toml not found: {services_path}", file=sys.stderr)
         return 1
 
-    services_data = tomllib.loads(services_path.read_text())
+    services_data = _load_services_data(services_path)
     certs_dir = Path(args.certs_dir).expanduser()
 
     if args.provision:

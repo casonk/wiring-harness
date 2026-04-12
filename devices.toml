@@ -6,18 +6,6 @@
 #
 # Run `sudo python3 scripts/export_mtls_profile.py --all-devices` to regenerate
 # profiles for every device in this file.
-
-[[devices]]
-name     = "fedora-desk"
-type     = "desktop"
-platform = "linux"
-
-[[devices]]
-name     = "iphone-13-mini"
-type     = "mobile"
-platform = "ios"
-
-[[devices]]
-name     = "iphone-14-pro"
-type     = "mobile"
-platform = "ios"
+#
+# Device names are personal — keep real entries in devices.local.toml (gitignored).
+# See devices.example.toml for the format.

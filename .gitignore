@@ -4,6 +4,8 @@ __pycache__/
 .ruff_cache/
 .venv/
 *.local
+services.local.toml
+devices.local.toml
 config/caddy/Caddyfile.combined.local
 CHATHISTORY.md
 CLAUDE.md

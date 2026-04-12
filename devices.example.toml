@@ -1,0 +1,17 @@
+# devices.example.toml — template for devices.local.toml
+#
+# Copy this file to devices.local.toml and replace the placeholder names with
+# your real device names.  devices.local.toml is gitignored and never committed.
+#
+# export_mtls_profile.py automatically merges devices.local.toml on top of
+# devices.toml, matching entries by `name`.
+
+[[devices]]
+name     = "my-desktop"
+type     = "desktop"
+platform = "linux"
+
+[[devices]]
+name     = "my-phone"
+type     = "mobile"
+platform = "ios"

@@ -26,10 +26,14 @@ hostname = "tachometer.internal"
 port     = 5100
 
 [[services]]
+name     = "intake-reports"
+hostname = "receipts.intake.internal"
+port     = 5200
+
+[[services]]
 name             = "snowbridge-filebrowser"
 hostname         = "files.snowbridge.internal"
 port_env_key     = "FILEBROWSER_HTTP_PORT"
 port_default     = 8080
-env_file         = "~/../snowbridge/config/web/filebrowser/filebrowser.env.local"
-client_ca_path   = "/var/lib/snowbridge/caddy/data/mtls/client-ca.crt"
 proxy_headers    = {"X-Snowbridge-Auth-User" = "snowbridge"}
+# env_file and client_ca_path are machine-specific — set them in services.local.toml (gitignored).
