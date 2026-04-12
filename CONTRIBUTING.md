@@ -8,6 +8,7 @@
 2. When adding a new device, register it in `devices.toml` then run `sudo python3 scripts/export_mtls_profile.py --all-devices`.
 3. After any cert or Caddy config change, run `sudo python3 scripts/setup_caddy.py --provision` to apply.
 4. Re-run `bash scripts/setup-mtls.sh` any time the WireGuard IP or service list changes.
+5. When deploying the Snowbridge File Browser fork behind the shared Caddy, run `./scripts/deploy_snowbridge_filebrowser_fork_image.sh` from this repo instead of recreating Snowbridge's standalone Caddy stack.
 
 ## Content Standards
 
