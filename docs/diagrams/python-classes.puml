@@ -1,0 +1,26 @@
+@startuml classes_wiring-harness
+set namespaceSeparator none
+class "DeviceSpec" as export_mtls_profile.DeviceSpec {
+  name : str
+  platform : str
+  type : str
+}
+class "IdentityPaths" as export_mtls_profile.IdentityPaths {
+  cert_path : Path
+  key_path : Path
+  p12_path : Path
+  passphrase_path : Path
+  serial_path : Path
+  slug : str
+  staged_p12_path : Path
+  staged_profile_path : Path
+}
+class "Ownership" as export_mtls_profile.Ownership {
+  gid : int
+  group_name : str
+  owner_name : str
+  uid : int
+}
+class "<color:red>SetupError</color>" as export_mtls_profile.SetupError {
+}
+@enduml
