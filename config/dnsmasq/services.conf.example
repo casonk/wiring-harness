@@ -6,4 +6,6 @@
 # Replace 10.99.0.1 with the WireGuard server IP.
 
 address=/config.clockwork.internal/10.99.0.1
+address=/tachometer.internal/10.99.0.1
+address=/receipts.intake.internal/10.99.0.1
 address=/files.snowbridge.internal/10.99.0.1
