@@ -3,9 +3,7 @@
 # Install at /etc/dnsmasq.d/wiring-harness.conf on the WireGuard/dnsmasq server.
 # Generated with correct IPs by scripts/setup-mtls.sh — re-run to update.
 #
-# Replace 10.99.0.1 with the WireGuard server IP.
+# Replace <wg-server-ip> with the WireGuard server IP from services.local.toml.
 
-address=/config.clockwork.internal/10.99.0.1
-address=/tachometer.internal/10.99.0.1
-address=/receipts.intake.internal/10.99.0.1
-address=/files.snowbridge.internal/10.99.0.1
+address=/<hostname>.home.internal/<wg-server-ip>
+address=/<hostname>.home.internal/<wg-server-ip>
