@@ -16,6 +16,7 @@ Wireguard lives in `short-circuit`. SSH extensions live in `pit-box`.
 - Combined Caddyfile generation from the service registry
 - dnsmasq A-record config for internal hostnames
 - System-level provisioning: cert install, Caddy restart, user linger
+- Consent reference: [`../../doc-repos/my-consent/remote-access-and-private-files.md`](../../doc-repos/my-consent/remote-access-and-private-files.md) documents the explicit consent covering personal certificate, mobileconfig, device, and remote-access processing handled by this repo.
 
 Out of scope: WireGuard setup (short-circuit), SSH (pit-box), service-specific
 systemd unit management (each service repo handles its own).
@@ -88,3 +89,28 @@ System certs (readable by Caddy) are installed to `/etc/caddy/certs/wiring-harne
 | `scripts/setup-mtls.sh` | Generate CA, server cert, client cert, mobileconfig, dnsmasq snippet |
 | `scripts/setup_caddy.py --provision` | Install certs, generate Caddyfile, restart Caddy, enable linger |
 | `scripts/export_mtls_profile.py` | Issue a per-device client cert and stage mobileconfig |
+| `scripts/deploy_snowbridge_filebrowser_fork_image.sh` | Build Snowbridge's patched File Browser image, update its env file, and recreate only the backend container |
+
+## Snowbridge Backend Deploys
+
+`wiring-harness` owns the shared Caddy entrypoint for
+`https://files.snowbridge.internal`, so backend-only Snowbridge File Browser
+deploys should happen from this repo instead of starting Snowbridge's optional
+standalone Caddy stack on the same host.
+
+```bash
+./scripts/deploy_snowbridge_filebrowser_fork_image.sh
+```
+
+That helper reuses the sibling `snowbridge` repo's File Browser image builder,
+writes `FILEBROWSER_IMAGE` into
+`snowbridge/config/web/filebrowser/filebrowser.env.local`, and recreates only
+the `filebrowser` service. If your repos are not siblings, pass
+`--snowbridge-repo /path/to/snowbridge`.
+
+If you changed `services.toml`, certs, hostnames, or the backend port, follow
+the backend deploy with:
+
+```bash
+sudo python3 scripts/setup_caddy.py --provision
+```
