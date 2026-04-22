@@ -5,6 +5,13 @@ class "DeviceSpec" as export_mtls_profile.DeviceSpec {
   platform : str
   type : str
 }
+class "ExtraP12" as export_mtls_profile.ExtraP12 {
+  display_name : str
+  identity_slug : str
+  p12_bytes : bytes
+  p12_file_name : str
+  passphrase : str
+}
 class "IdentityPaths" as export_mtls_profile.IdentityPaths {
   cert_path : Path
   key_path : Path

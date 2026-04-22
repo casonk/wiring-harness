@@ -5,18 +5,29 @@
 #
 # setup_caddy.py automatically merges services.local.toml on top of
 # services.toml, matching entries by `name`.
+#
+# The registry covers all private browser/admin endpoints, not just the sites
+# rendered into the shared Caddyfile.
 
 wg_ip = "<wireguard-server-ip>"
 
 [[services]]
-name     = "my-app"
-hostname = "app.home.internal"
-port     = 3000
+name        = "my-app"
+description = "My app UI"
+owner_repo  = "./util-repos/my-app"
+hostname    = "app.home.internal"
+access_mode = "shared-mtls"
+ingress     = "wiring-harness-caddy"
+port        = 3000
 
 # Service whose port is read from an env file:
 [[services]]
 name         = "my-service"
+description  = "Service with env-driven backend port"
+owner_repo   = "./util-repos/my-service"
 hostname     = "service.home.internal"
+access_mode  = "shared-mtls"
+ingress      = "wiring-harness-caddy"
 port_env_key = "SERVICE_PORT"
 port_default = 8080
 env_file     = "~/../<service-repo>/config/<path>.env.local"
@@ -24,7 +35,32 @@ env_file     = "~/../<service-repo>/config/<path>.env.local"
 # Service with its own client CA and custom proxy headers:
 [[services]]
 name           = "my-secure-service"
+description    = "Service with its own client CA"
+owner_repo     = "./util-repos/my-secure-service"
 hostname       = "secure.home.internal"
+access_mode    = "snowbridge-mtls"
+ingress        = "wiring-harness-caddy"
 port           = 9000
 client_ca_path = "/var/lib/<service-repo>/caddy/data/mtls/client-ca.crt"
 proxy_headers  = {"X-Custom-Header" = "value"}
+
+# Service repo owns the host Caddy drop-in, but the hostname still belongs in
+# the shared site registry.
+[[services]]
+name        = "my-repo-caddy-site"
+description = "Repo-managed Caddy site"
+owner_repo  = "./util-repos/my-repo"
+hostname    = "terminal.home.internal"
+access_mode = "shared-mtls"
+ingress     = "repo-caddy"
+port        = 7681
+
+# Direct VPN-only admin surface.
+[[services]]
+name        = "my-direct-admin"
+description = "Direct service on a non-443 port"
+owner_repo  = "./util-repos/my-admin"
+hostname    = "admin.home.internal"
+access_mode = "vpn-only-direct"
+ingress     = "direct"
+port        = 9090

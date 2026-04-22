@@ -1,10 +1,23 @@
-# wiring-harness service registry
+# wiring-harness private site registry
 #
-# Each [[services]] entry is one HTTPS site served by the shared Caddy instance.
-# All services share one server TLS cert (their hostnames become SANs).
-# Client auth uses per-service CAs: omit client_ca_path to use the shared
-# wiring-harness CA; set it explicitly for services with their own CA
-# (e.g. snowbridge generates its own client CA as part of its stack).
+# Each [[services]] entry is one private browser/admin endpoint reachable from
+# the home VPN. `services.toml` plus gitignored `services.local.toml` is the
+# single source of truth for:
+#   - hostnames
+#   - owning repo
+#   - access mode
+#   - ingress type
+#   - shared-Caddy backend details (when ingress = "wiring-harness-caddy")
+#
+# ingress values:
+#   - wiring-harness-caddy  → rendered into the shared Caddyfile here
+#   - repo-caddy            → service repo renders its own host Caddy drop-in
+#   - direct                → VPN-only direct service, not fronted by shared Caddy
+#
+# access_mode values:
+#   - shared-mtls           → shared wiring-harness client cert/profile
+#   - snowbridge-mtls       → Snowbridge-specific client cert/profile
+#   - vpn-only-direct       → VPN-only direct service
 #
 # Port resolution order:
 #   1. Explicit `port` field
@@ -13,5 +26,5 @@
 #
 # Run `sudo python3 scripts/setup_caddy.py --provision` to apply.
 #
-# Hostnames, IPs, and all service entries are personal — keep them in
+# Hostnames, IPs, and all site entries are personal — keep them in
 # services.local.toml (gitignored). See services.example.toml for the format.

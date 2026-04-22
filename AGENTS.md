@@ -3,17 +3,19 @@
 ## Purpose
 
 `wiring-harness` owns the shared Caddy, mTLS, and DNS infrastructure for all
-home-server services.  Services declare themselves in `services.toml`; the
-provisioning scripts handle everything else.
+home-server services. Services declare themselves in `services.toml`; that
+registry is also the canonical inventory for private browser/admin endpoints,
+including repo-managed Caddy drop-ins and direct VPN-only surfaces.
 
 WireGuard setup lives in `short-circuit`.  SSH extensions live in `pit-box`.
 Service-specific systemd units and sudoers rules stay in each service's own repo.
 
 ## Repository Layout
 
-- `services.toml`: service registry — one `[[services]]` entry per HTTPS site
+- `services.toml`: private site registry — one `[[services]]` entry per private browser/admin endpoint
 - `scripts/setup-mtls.sh`: generates CA, server cert, client cert, mobileconfig, dnsmasq snippet
 - `scripts/setup_caddy.py`: reads services.toml, generates Caddyfile, provisions system
+- `scripts/render_private_site_inventory.py`: renders a local Markdown inventory from the merged registry
 - `scripts/export_mtls_profile.py`: issues per-device client certs and stages mobileconfigs
 - `config/caddy/Caddyfile.example`: reference Caddyfile showing expected structure
 - `config/dnsmasq/services.conf.example`: reference dnsmasq config
@@ -29,8 +31,9 @@ sudo python3 scripts/export_mtls_profile.py --device-name iphone
 
 ## Operating Rules
 
-1. `services.toml` is the single source of truth for which services exist.
-   Adding a service means adding one TOML entry — never editing the scripts.
+1. `services.toml` is the single source of truth for private site hostnames and
+   ownership. Adding or moving a site means updating one TOML entry — never
+   hard-coding a second hostname list in sibling repos.
 2. The server TLS cert covers all service hostnames as SANs.  Re-run
    `setup-mtls.sh` any time the hostname list or WireGuard IP changes, then
    re-run `setup_caddy.py --provision`.
@@ -64,3 +67,4 @@ Read `LESSONSLEARNED.md` and `CHATHISTORY.md` after `AGENTS.md` when resuming wo
 - `./util-repos/pit-box` — SSH extensions
 - `./util-repos/clockwork` — scheduler web app (clockwork-web)
 - `./util-repos/snowbridge` — file sharing stack (filebrowser)
+- `./util-repos/shock-relay` — messaging relay (Signal, Telegram, WhatsApp, Twilio SMS, Gmail IMAP); use `services/gmail-imap/send_email.py <to> <subject> <body>` to send email when Gmail MCP tools are unavailable
