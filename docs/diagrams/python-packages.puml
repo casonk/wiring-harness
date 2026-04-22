@@ -2,6 +2,11 @@
 set namespaceSeparator none
 top to bottom direction
 skinparam componentStyle rectangle
+rectangle "export_mtls_passwords_to_keepass\n1 python file" as export_mtls_passwords_to_keepass
 rectangle "export_mtls_profile\n1 python file" as export_mtls_profile
+rectangle "render_private_site_inventory\n1 python file" as render_private_site_inventory
 rectangle "setup_caddy\n1 python file" as setup_caddy
+rectangle "site_registry\n1 python file" as site_registry
+render_private_site_inventory --> site_registry
+setup_caddy --> site_registry
 @enduml

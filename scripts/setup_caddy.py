@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Install the combined Caddyfile for all services registered in services.toml.
+"""Install the combined Caddyfile for wiring-harness-managed registry entries.
 
-Each [[services]] entry in services.toml becomes one mTLS-protected HTTPS site.
-All sites share one server TLS cert (with SANs covering every hostname).
-Client auth uses per-service CAs: omit client_ca_path to use the shared
-wiring-harness CA; set it explicitly for services with their own CA.
+`services.toml` is the private site registry for the host. Only entries whose
+`ingress` is `wiring-harness-caddy` become shared-Caddy mTLS sites here. Other
+entries still participate in the generated private-site inventory and can be
+consumed by sibling repos such as `pit-box`.
 
 Typical usage:
     sudo python3 scripts/setup_caddy.py --provision
@@ -23,6 +23,8 @@ Options:
     --certs-dir DIR      User cert directory (default: ~/.config/wiring-harness/certs)
     --output PATH        Also write a reference Caddyfile copy
                          (default: config/caddy/Caddyfile.combined.local)
+    --inventory-output   Also write the merged private-site inventory report
+                         (default: config/private-sites.inventory.local.md)
     --validate           Run caddy validate without installing
 """
 
@@ -35,8 +37,14 @@ import pwd
 import shutil
 import subprocess
 import sys
-import tomllib  # type: ignore[no-redef]
 from pathlib import Path
+
+from site_registry import (
+    caddy_managed_sites,
+    dns_sites,
+    load_sites,
+    render_inventory_markdown,
+)
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
@@ -45,41 +53,11 @@ DEFAULT_SERVICES_TOML = REPO_ROOT / "services.toml"
 DEFAULT_USER_CERTS_DIR = Path.home() / ".config" / "wiring-harness" / "certs"
 DEFAULT_SYSTEM_CERTS_DIR = Path("/etc/caddy/certs/wiring-harness")
 DEFAULT_OUTPUT = REPO_ROOT / "config" / "caddy" / "Caddyfile.combined.local"
+DEFAULT_INVENTORY_OUTPUT = REPO_ROOT / "config" / "private-sites.inventory.local.md"
 SYSTEM_CADDYFILE = Path("/etc/caddy/Caddyfile")
 HOSTS_FILE = Path("/etc/hosts")
 HOSTS_MARKER_BEGIN = "# wiring-harness BEGIN"
 HOSTS_MARKER_END = "# wiring-harness END"
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _load_services_data(services_path: Path) -> dict:
-    """Load services.toml and merge services.local.toml overrides if present.
-
-    The local file is resolved as <stem>.local.toml alongside the main file
-    (e.g. services.local.toml next to services.toml).  Entries are matched by
-    ``name``; unknown names are appended as new services.
-    """
-    data = tomllib.loads(services_path.read_text())
-    local_path = services_path.with_name(services_path.stem + ".local.toml")
-    if not local_path.exists():
-        return data
-
-    local = tomllib.loads(local_path.read_text())
-    for k, v in local.items():
-        if k != "services":
-            data[k] = v
-    local_by_name = {s["name"]: s for s in local.get("services", [])}
-    base_by_name = {s["name"]: s for s in data.get("services", [])}
-    for name, overrides in local_by_name.items():
-        if name in base_by_name:
-            base_by_name[name].update(overrides)
-        else:
-            data.setdefault("services", []).append(overrides)
-    return data
 
 
 def _run(cmd: list[str], timeout: int = 30) -> tuple[int, str]:
@@ -261,12 +239,18 @@ def generate_caddyfile(services: list[dict], system_certs_dir: Path, home: Path)
 # ---------------------------------------------------------------------------
 
 
-def provision(*, services_data: dict, user_certs_dir: Path) -> int:
+def _write_inventory_report(sites: list[dict], services_path: Path, output_path: Path) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(render_inventory_markdown(sites, services_path))
+    print(f"  wrote inventory report: {output_path}")
+
+
+def provision(*, sites: list[dict], services_path: Path, user_certs_dir: Path, inventory_output: Path) -> int:
     if os.geteuid() != 0:
         print("error: --provision must be run with sudo", file=sys.stderr)
         return 1
 
-    services = services_data.get("services", [])
+    services = caddy_managed_sites(sites)
     home = _invoking_user_home()
     caddy_gid = _caddy_gid()
 
@@ -320,7 +304,7 @@ def provision(*, services_data: dict, user_certs_dir: Path) -> int:
         print(f"warning: restorecon failed: {out_se}", file=sys.stderr)
 
     # ── 5. Update /etc/hosts managed block ───────────────────────────────────
-    hostnames = [svc["hostname"] for svc in services]
+    hostnames = [site["hostname"] for site in dns_sites(sites)]
     _update_hosts(hostnames)
     print(f"  updated {HOSTS_FILE} ({len(hostnames)} entries)")
 
@@ -332,6 +316,7 @@ def provision(*, services_data: dict, user_certs_dir: Path) -> int:
     DEFAULT_OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     DEFAULT_OUTPUT.write_text(content)
     print(f"  wrote reference copy: {DEFAULT_OUTPUT}")
+    _write_inventory_report(sites, services_path, inventory_output)
 
     # ── 7. Validate ───────────────────────────────────────────────────────────
     rc, out = _run(["caddy", "validate", "--config", str(SYSTEM_CADDYFILE)])
@@ -372,7 +357,7 @@ def provision(*, services_data: dict, user_certs_dir: Path) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
-        description="Install the combined Caddyfile from wiring-harness/services.toml.",
+        description="Install the combined Caddyfile from the wiring-harness site registry.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -386,6 +371,8 @@ def main(argv: list[str] | None = None) -> int:
                    help="User cert directory (default: ~/.config/wiring-harness/certs)")
     p.add_argument("--output", metavar="PATH", default=str(DEFAULT_OUTPUT),
                    help=f"Reference Caddyfile output (default: {DEFAULT_OUTPUT})")
+    p.add_argument("--inventory-output", metavar="PATH", default=str(DEFAULT_INVENTORY_OUTPUT),
+                   help=f"Inventory report output (default: {DEFAULT_INVENTORY_OUTPUT})")
     p.add_argument("--validate", action="store_true",
                    help="Run caddy validate without installing")
     args = p.parse_args(argv)
@@ -395,20 +382,28 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: services.toml not found: {services_path}", file=sys.stderr)
         return 1
 
-    services_data = _load_services_data(services_path)
+    all_sites = load_sites(services_path)
+    caddy_sites = caddy_managed_sites(all_sites)
     certs_dir = Path(args.certs_dir).expanduser()
+    inventory_output = Path(args.inventory_output).expanduser()
 
     if args.provision:
-        return provision(services_data=services_data, user_certs_dir=certs_dir)
+        return provision(
+            sites=all_sites,
+            services_path=services_path,
+            user_certs_dir=certs_dir,
+            inventory_output=inventory_output,
+        )
 
     # Reference Caddyfile only (no install)
     certs_ref = DEFAULT_SYSTEM_CERTS_DIR if DEFAULT_SYSTEM_CERTS_DIR.exists() else certs_dir
-    content = generate_caddyfile(services_data.get("services", []), certs_ref, home)
+    content = generate_caddyfile(caddy_sites, certs_ref, home)
 
     output_path = Path(args.output).expanduser()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(content)
     print(f"wrote: {output_path}")
+    _write_inventory_report(all_sites, services_path, inventory_output)
 
     if args.validate:
         rc, out = _run(["caddy", "validate", "--config", str(output_path)])

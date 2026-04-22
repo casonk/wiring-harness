@@ -49,6 +49,11 @@ DEFAULT_PROFILE_IDENTIFIER_PREFIX = "local.wiring-harness.mtls"
 DEFAULT_ORGANIZATION = "wiring-harness"
 SLUG_PREFIX = "wiring-harness-mtls"
 
+SNOWBRIDGE_CA_CERT = Path("/var/lib/snowbridge/caddy/data/mtls/client-ca.crt")
+SNOWBRIDGE_CA_KEY = Path("/var/lib/snowbridge/caddy/data/mtls/client-ca.key")
+SNOWBRIDGE_ISSUED_DIR = Path("/var/lib/snowbridge/caddy/data/mtls/issued")
+SNOWBRIDGE_SLUG_PREFIX = "snowbridge-caddy-mtls"
+
 CA_NICK = "Wiring Harness CA"
 LEGACY_NSS_NICKS = (
     "Clockwork CA",
@@ -92,6 +97,15 @@ class Ownership:
     gid: int
     owner_name: str
     group_name: str
+
+
+@dataclass(frozen=True)
+class ExtraP12:
+    p12_bytes: bytes
+    p12_file_name: str
+    display_name: str
+    identity_slug: str
+    passphrase: str
 
 
 @dataclass(frozen=True)
@@ -545,8 +559,43 @@ def build_mobileconfig(
     device_name: str,
     p12_file_name: str,
     ca_cert_file_name: str,
+    extra_p12s: list[ExtraP12] | None = None,
 ) -> bytes:
-    digest = hashlib.sha256(ca_cert_der + p12_bytes).hexdigest()
+    all_p12_bytes = p12_bytes + b"".join(e.p12_bytes for e in (extra_p12s or []))
+    digest = hashlib.sha256(ca_cert_der + all_p12_bytes).hexdigest()
+    payload_content: list[dict] = [
+        {
+            "PayloadType": "com.apple.security.root",
+            "PayloadVersion": 1,
+            "PayloadIdentifier": f"{profile_identifier}.root",
+            "PayloadUUID": stable_uuid("wiring-harness-mtls-root", digest),
+            "PayloadDisplayName": "Wiring Harness CA",
+            "PayloadDescription": "Installs the Wiring Harness CA so the device trusts all private HTTPS endpoints.",  # noqa: E501
+            "PayloadCertificateFileName": ca_cert_file_name,
+            "PayloadContent": ca_cert_der,
+        },
+        {
+            "PayloadType": "com.apple.security.pkcs12",
+            "PayloadVersion": 1,
+            "PayloadIdentifier": f"{profile_identifier}.identity",
+            "PayloadUUID": stable_uuid("wiring-harness-mtls-identity", digest),
+            "PayloadDisplayName": f"Wiring Harness mTLS Client Identity ({device_name})",
+            "PayloadDescription": "Installs the client certificate for private mTLS access.",
+            "PayloadCertificateFileName": p12_file_name,
+            "PayloadContent": p12_bytes,
+        },
+    ]
+    for extra in (extra_p12s or []):
+        payload_content.append({
+            "PayloadType": "com.apple.security.pkcs12",
+            "PayloadVersion": 1,
+            "PayloadIdentifier": f"{profile_identifier}.{extra.identity_slug}",
+            "PayloadUUID": stable_uuid(f"wiring-harness-extra-{extra.identity_slug}", digest),
+            "PayloadDisplayName": extra.display_name,
+            "PayloadDescription": f"Installs the client certificate for {extra.display_name}.",
+            "PayloadCertificateFileName": extra.p12_file_name,
+            "PayloadContent": extra.p12_bytes,
+        })
     profile = {
         "PayloadType": "Configuration",
         "PayloadVersion": 1,
@@ -556,28 +605,7 @@ def build_mobileconfig(
         "PayloadDescription": f"Trust profile and client identity for mTLS access on {device_name}.",
         "PayloadOrganization": organization,
         "PayloadRemovalDisallowed": False,
-        "PayloadContent": [
-            {
-                "PayloadType": "com.apple.security.root",
-                "PayloadVersion": 1,
-                "PayloadIdentifier": f"{profile_identifier}.root",
-                "PayloadUUID": stable_uuid("wiring-harness-mtls-root", digest),
-                "PayloadDisplayName": "Wiring Harness CA",
-                "PayloadDescription": "Installs the Wiring Harness CA so the device trusts all private HTTPS endpoints.",  # noqa: E501
-                "PayloadCertificateFileName": ca_cert_file_name,
-                "PayloadContent": ca_cert_der,
-            },
-            {
-                "PayloadType": "com.apple.security.pkcs12",
-                "PayloadVersion": 1,
-                "PayloadIdentifier": f"{profile_identifier}.identity",
-                "PayloadUUID": stable_uuid("wiring-harness-mtls-identity", digest),
-                "PayloadDisplayName": f"Wiring Harness mTLS Client Identity ({device_name})",
-                "PayloadDescription": "Installs the client certificate for private mTLS access.",
-                "PayloadCertificateFileName": p12_file_name,
-                "PayloadContent": p12_bytes,
-            },
-        ],
+        "PayloadContent": payload_content,
     }
     return plistlib.dumps(profile, fmt=plistlib.FMT_XML, sort_keys=False)
 
@@ -592,6 +620,7 @@ def stage_mobile_profile(
     organization: str,
     ownership: Ownership,
     dry_run: bool,
+    extra_p12s: list[ExtraP12] | None = None,
 ) -> None:
     ca_cert_der = load_certificate_der(ca_cert)
     p12_bytes = identity.p12_path.read_bytes()
@@ -600,16 +629,127 @@ def stage_mobile_profile(
         profile_identifier=profile_identifier, profile_name=profile_name,
         organization=organization, device_name=device_name,
         p12_file_name=identity.p12_path.name, ca_cert_file_name=ca_cert.name,
+        extra_p12s=extra_p12s,
     )
     write_file(identity.staged_profile_path, mobileconfig, 0o644, ownership, dry_run)
     copy_file(identity.p12_path, identity.staged_p12_path, 0o640, ownership, dry_run)
     log(f"  staged {identity.staged_profile_path.name}")
     log(f"  staged {identity.staged_p12_path.name}")
-    log(f"  identity import password: {identity.passphrase_path.read_text().strip()}")
+    log(f"  wiring-harness identity import password: {identity.passphrase_path.read_text().strip()}")
+    for extra in (extra_p12s or []):
+        log(f"  {extra.display_name} import password: {extra.passphrase}")
     log("  install steps on iPhone:")
     log(f"    1. Open {identity.staged_profile_path.name} from the snowbridge SMB share.")
     log("    2. Settings → Profile Downloaded → Install.")
     log("    3. Settings → General → About → Certificate Trust Settings → enable Wiring Harness CA.")
+
+
+# ---------------------------------------------------------------------------
+# Snowbridge extra identity
+# ---------------------------------------------------------------------------
+
+
+def _gather_snowbridge_extra_p12(
+    *,
+    device_name: str,
+    slug: str,
+    ca_cert: Path,
+    ca_key: Path,
+    issued_dir: Path,
+    rotate: bool,
+    dry_run: bool,
+) -> ExtraP12 | None:
+    """Issue (if needed) and load the snowbridge filebrowser client identity."""
+    if not ca_cert.is_file():
+        return None
+
+    prefix = issued_dir / f"{SNOWBRIDGE_SLUG_PREFIX}-{slug}"
+    cert_path = prefix.with_suffix(".crt")
+    key_path = prefix.with_suffix(".key")
+    p12_path = prefix.with_suffix(".p12")
+    passphrase_path = prefix.with_suffix(".passphrase")
+    serial_path = issued_dir / "client-ca.srl"
+
+    needs_issue = not (
+        all([cert_path.exists(), key_path.exists(), p12_path.exists()])
+        and passphrase_path.exists()
+    ) or rotate
+
+    if needs_issue:
+        if not ca_key.is_file():
+            log(f"  [snowbridge] CA key not found — skipping snowbridge identity for {device_name}")
+            return None
+
+        ensure_openssl()
+        if dry_run:
+            log(f"  [snowbridge] would issue identity for {device_name}")
+            return None
+
+        if passphrase_path.exists() and not rotate:
+            passphrase = passphrase_path.read_text(encoding="utf-8").strip()
+        else:
+            passphrase = secrets.token_urlsafe(24)
+
+        ensure_directory(issued_dir, 0o750, dry_run=False)
+        passphrase_path.write_text(passphrase + "\n", encoding="utf-8")
+        os.chmod(passphrase_path, 0o600)
+
+        for path in (cert_path, key_path, p12_path):
+            path.unlink(missing_ok=True)
+
+        csr_path = cert_path.with_suffix(".csr")
+        with tempfile.NamedTemporaryFile("w", delete=False, suffix=".cnf") as fh:
+            fh.write(
+                "[v3_client]\n"
+                "basicConstraints = critical,CA:FALSE\n"
+                "keyUsage = critical,digitalSignature,keyEncipherment\n"
+                "extendedKeyUsage = clientAuth\n"
+                "subjectKeyIdentifier = hash\n"
+                "authorityKeyIdentifier = keyid,issuer\n"
+            )
+            ext_path = Path(fh.name)
+
+        env = {**os.environ, "SB_P12_PASS": passphrase}
+        try:
+            run_command(["openssl", "req", "-new", "-newkey", "rsa:2048", "-nodes",
+                         "-keyout", str(key_path), "-out", str(csr_path),
+                         "-subj", f"/CN=Snowbridge {device_name} Client/O=snowbridge"])
+            run_command(["openssl", "x509", "-req",
+                         "-in", str(csr_path), "-CA", str(ca_cert), "-CAkey", str(ca_key),
+                         "-CAserial", str(serial_path), "-CAcreateserial",
+                         "-out", str(cert_path), "-days", "825", "-sha256",
+                         "-extfile", str(ext_path), "-extensions", "v3_client"])
+            run_command(["openssl", "pkcs12", "-export",
+                         "-name", f"Snowbridge {device_name} Client",
+                         "-inkey", str(key_path), "-in", str(cert_path),
+                         "-certfile", str(ca_cert), "-out", str(p12_path),
+                         "-passout", "env:SB_P12_PASS"], env=env)
+            os.chmod(key_path, 0o600)
+            os.chmod(cert_path, 0o644)
+            os.chmod(p12_path, 0o600)
+            _chown_to_invoking_user([cert_path, key_path, p12_path, passphrase_path, issued_dir])
+        finally:
+            csr_path.unlink(missing_ok=True)
+            ext_path.unlink(missing_ok=True)
+
+        log(f"  [snowbridge] issued identity for {device_name}")
+
+    if not p12_path.is_file():
+        return None
+
+    try:
+        passphrase = passphrase_path.read_text(encoding="utf-8").strip()
+    except PermissionError:
+        log(f"  [snowbridge] cannot read passphrase for {device_name}: {passphrase_path}")
+        return None
+
+    return ExtraP12(
+        p12_bytes=p12_path.read_bytes(),
+        p12_file_name=p12_path.name,
+        display_name=f"Snowbridge mTLS Client Identity ({device_name})",
+        identity_slug=f"snowbridge-{slug}",
+        passphrase=passphrase,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -631,6 +771,10 @@ def export_device(
     output: str | None = None,
     p12_output: str | None = None,
     passphrase_override: str | None = None,
+    snowbridge_ca_cert: Path = SNOWBRIDGE_CA_CERT,
+    snowbridge_ca_key: Path = SNOWBRIDGE_CA_KEY,
+    snowbridge_issued_dir: Path = SNOWBRIDGE_ISSUED_DIR,
+    no_snowbridge: bool = False,
 ) -> None:
     log(f"\n── {device.name} ({device.type}/{device.platform}) ──")
     identity = build_identity_paths(device.name, issued_dir, output, p12_output)
@@ -656,10 +800,20 @@ def export_device(
             device_name=device.name, home=_invoking_user_home(), dry_run=dry_run,
         )
     else:
+        extra_p12s: list[ExtraP12] = []
+        if not no_snowbridge:
+            sb = _gather_snowbridge_extra_p12(
+                device_name=device.name, slug=identity.slug,
+                ca_cert=snowbridge_ca_cert, ca_key=snowbridge_ca_key,
+                issued_dir=snowbridge_issued_dir, rotate=rotate, dry_run=dry_run,
+            )
+            if sb is not None:
+                extra_p12s.append(sb)
         stage_mobile_profile(
             ca_cert=ca_cert, identity=identity, device_name=device.name,
             profile_identifier=profile_identifier, profile_name=profile_name,
             organization=organization, ownership=ownership, dry_run=dry_run,
+            extra_p12s=extra_p12s or None,
         )
 
 
@@ -709,6 +863,14 @@ def parse_args() -> argparse.Namespace:
                         help="Replace existing identities with freshly signed ones.")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print actions without changing the host.")
+    parser.add_argument("--snowbridge-ca-cert", default=None,
+                        help=f"Snowbridge filebrowser client CA cert. Default: {SNOWBRIDGE_CA_CERT}")
+    parser.add_argument("--snowbridge-ca-key", default=None,
+                        help=f"Snowbridge filebrowser client CA key. Default: {SNOWBRIDGE_CA_KEY}")
+    parser.add_argument("--snowbridge-issued-dir", default=None,
+                        help=f"Directory for snowbridge-issued client identities. Default: {SNOWBRIDGE_ISSUED_DIR}")
+    parser.add_argument("--no-snowbridge", action="store_true",
+                        help="Skip the snowbridge filebrowser client identity payload.")
     return parser.parse_args()
 
 
@@ -719,6 +881,9 @@ def main() -> int:
     ca_key = Path(args.ca_key).expanduser().resolve() if args.ca_key else _default_ca_key()
     issued_dir = Path(args.issued_dir).expanduser().resolve() if args.issued_dir else _default_issued_dir()
     ownership = resolve_ownership(args.owner, args.group)
+    sb_ca_cert = Path(args.snowbridge_ca_cert).expanduser().resolve() if args.snowbridge_ca_cert else SNOWBRIDGE_CA_CERT
+    sb_ca_key = Path(args.snowbridge_ca_key).expanduser().resolve() if args.snowbridge_ca_key else SNOWBRIDGE_CA_KEY
+    sb_issued_dir = Path(args.snowbridge_issued_dir).expanduser().resolve() if args.snowbridge_issued_dir else SNOWBRIDGE_ISSUED_DIR
 
     try:
         if not args.dry_run:
@@ -744,6 +909,8 @@ def main() -> int:
                     device=device, ca_cert=ca_cert, ca_key=ca_key, issued_dir=issued_dir,
                     ownership=ownership, profile_identifier_prefix=args.profile_identifier_prefix,
                     organization=args.organization, rotate=args.rotate, dry_run=args.dry_run,
+                    snowbridge_ca_cert=sb_ca_cert, snowbridge_ca_key=sb_ca_key,
+                    snowbridge_issued_dir=sb_issued_dir, no_snowbridge=args.no_snowbridge,
                 )
                 if device.type == "desktop":
                     has_desktop = True
@@ -763,6 +930,8 @@ def main() -> int:
                 organization=args.organization, rotate=args.rotate, dry_run=args.dry_run,
                 output=args.output, p12_output=args.p12_output,
                 passphrase_override=args.identity_passphrase,
+                snowbridge_ca_cert=sb_ca_cert, snowbridge_ca_key=sb_ca_key,
+                snowbridge_issued_dir=sb_issued_dir, no_snowbridge=args.no_snowbridge,
             )
             if device.type == "desktop":
                 has_desktop = True

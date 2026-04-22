@@ -7,7 +7,7 @@ skinparam componentStyle rectangle
 skinparam linetype ortho
 rectangle ".github/workflows/ci.yml\n4 detected tools" as source_github_workflows_ci_yml #E0F2FE
 rectangle "scripts/deploy_snowbridge_filebrowser_fork_image.sh\n13 detected tools" as source_scripts_deploy_snowbridge_filebrowser_fork_image_sh #E0F2FE
-rectangle "scripts/setup-mtls.sh\n7 detected tools" as source_scripts_setup_mtls_sh #E0F2FE
+rectangle "scripts/setup-mtls.sh\n8 detected tools" as source_scripts_setup_mtls_sh #E0F2FE
 cloud "(command_exists" as tool_command_exists #FEF3C7
 cloud "actions/checkout" as tool_actions_checkout #FEF3C7
 cloud "actions/setup-python" as tool_actions_setup_python #FEF3C7
@@ -19,7 +19,6 @@ cloud "docker" as tool_docker #FEF3C7
 cloud "docker compose" as tool_docker_compose #FEF3C7
 cloud "docker-compose" as tool_docker_compose_2 #FEF3C7
 cloud "grep" as tool_grep #FEF3C7
-cloud "head" as tool_head #FEF3C7
 cloud "install" as tool_install #FEF3C7
 cloud "mkdir" as tool_mkdir #FEF3C7
 cloud "next" as tool_next #FEF3C7
@@ -28,6 +27,8 @@ cloud "pip" as tool_pip #FEF3C7
 cloud "podman-compose" as tool_podman_compose #FEF3C7
 cloud "pre-commit" as tool_pre_commit #FEF3C7
 cloud "print" as tool_print #FEF3C7
+cloud "python3" as tool_python3 #FEF3C7
+cloud "readarray" as tool_readarray #FEF3C7
 cloud "rm" as tool_rm #FEF3C7
 cloud "systemctl" as tool_systemctl #FEF3C7
 cloud "updated" as tool_updated #FEF3C7
@@ -50,13 +51,14 @@ source_scripts_deploy_snowbridge_filebrowser_fork_image_sh --> tool_rm
 source_scripts_deploy_snowbridge_filebrowser_fork_image_sh --> tool_updated
 source_scripts_setup_mtls_sh --> tool_chmod
 source_scripts_setup_mtls_sh --> tool_cp
-source_scripts_setup_mtls_sh --> tool_head
 source_scripts_setup_mtls_sh --> tool_mkdir
 source_scripts_setup_mtls_sh --> tool_openssl
+source_scripts_setup_mtls_sh --> tool_python3
+source_scripts_setup_mtls_sh --> tool_readarray
 source_scripts_setup_mtls_sh --> tool_rm
 source_scripts_setup_mtls_sh --> tool_systemctl
 note as toolingGraphSummary
 Scanned 3 tooling entrypoints.
-Detected 23 third-party tools.
+Detected 24 third-party tools.
 end note
 @enduml
