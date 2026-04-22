@@ -2,10 +2,12 @@
 
 Shared Caddy, mTLS, and DNS provisioning for the home server portfolio.
 
-Each service (clockwork-web, snowbridge-filebrowser, …) is declared once in
-`services.toml`. The provisioning scripts read that registry to generate a
-combined Caddyfile, shared server TLS cert, per-service client CA config, and
-dnsmasq entries — so adding a new service is one config entry, not a script edit.
+Each private browser/admin site (clockwork-web, snowbridge-filebrowser,
+pit-box-webterm, …) is declared once in `services.toml`. The provisioning
+scripts read that registry to generate a combined Caddyfile for
+`wiring-harness-caddy` entries, shared server TLS cert SANs for any shared-mTLS
+hostnames, dnsmasq entries, and a local inventory report — so adding or moving
+an endpoint is one registry edit, not a script edit in multiple repos.
 
 Wireguard lives in `short-circuit`. SSH extensions live in `pit-box`.
 
@@ -24,7 +26,7 @@ systemd unit management (each service repo handles its own).
 ## Quick Start
 
 ```bash
-# 1. Edit services.toml to register your services
+# 1. Edit services.toml / services.local.toml to register your private sites
 
 # 2. Generate CA, server cert, client cert, and iOS mobileconfig
 WH_WG_IP=10.99.0.1 bash scripts/setup-mtls.sh
@@ -32,40 +34,72 @@ WH_WG_IP=10.99.0.1 bash scripts/setup-mtls.sh
 # 3. Install Caddyfile, copy certs, restart Caddy, enable linger
 sudo python3 scripts/setup_caddy.py --provision
 
-# 4. Issue a per-device mobileconfig (repeat for each device)
+# 4. Refresh the local inventory report (optional standalone step)
+python3 scripts/render_private_site_inventory.py
+
+# 5. Issue a per-device mobileconfig (repeat for each device)
 sudo python3 scripts/export_mtls_profile.py --device-name iphone
 ```
 
-## Adding a New Service
+## Adding a New Private Site
 
 Add one `[[services]]` entry to `services.toml`:
 
 ```toml
 [[services]]
-name     = "my-new-app"
-hostname = "app.home.internal"
-port     = 3000
+name        = "my-new-app"
+description = "My app UI"
+owner_repo  = "./util-repos/my-app"
+hostname    = "app.home.internal"
+access_mode = "shared-mtls"
+ingress     = "wiring-harness-caddy"
+port        = 3000
 ```
+
+If the hostname is used by a sibling repo's own Caddy drop-in or by a direct
+VPN-only service, keep the same registry entry but set `ingress = "repo-caddy"`
+or `ingress = "direct"` instead.
 
 Then re-run provisioning:
 
 ```bash
 WH_WG_IP=10.99.0.1 bash scripts/setup-mtls.sh   # regenerates server cert SANs
 sudo python3 scripts/setup_caddy.py --provision
+python3 scripts/render_private_site_inventory.py
 ```
 
 ## Service Registry (`services.toml`)
 
 | Field | Description |
 |---|---|
-| `name` | Identifier used in filenames and log output |
-| `hostname` | DNS hostname served by Caddy |
-| `port` | Backend port (takes priority over env lookup) |
+| `name` | Stable registry key used in filenames and cross-repo lookups |
+| `description` | Human-readable label used in the generated inventory |
+| `owner_repo` | Repo that owns the service or admin surface |
+| `hostname` | Canonical private hostname |
+| `access_mode` | `shared-mtls`, `snowbridge-mtls`, or `vpn-only-direct` |
+| `ingress` | `wiring-harness-caddy`, `repo-caddy`, or `direct` |
+| `port` | Backend port or direct service port (takes priority over env lookup) |
 | `port_env_key` | Env var name to read port from `env_file` |
 | `port_default` | Fallback port when env lookup finds nothing |
 | `env_file` | Path to env file for port lookup |
 | `client_ca_path` | Override client CA; omit to use the shared wiring-harness CA |
 | `proxy_headers` | Extra headers injected by Caddy into the upstream request |
+| `dns_enabled` | Optional override; defaults to `true` for VPN DNS publication |
+
+Only `ingress = "wiring-harness-caddy"` entries become blocks in the combined
+host Caddyfile. `repo-caddy` and `direct` entries still appear in the local
+inventory report and in the merged hostname lookup used by sibling repos.
+
+## Local Inventory Report
+
+The registry can also render a concise Markdown inventory of current private
+sites, including owner repo, access mode, and ingress type.
+
+```bash
+python3 scripts/render_private_site_inventory.py
+```
+
+By default this writes `config/private-sites.inventory.local.md` (gitignored).
 
 ## Cert Layout
 
@@ -88,6 +122,7 @@ System certs (readable by Caddy) are installed to `/etc/caddy/certs/wiring-harne
 |---|---|
 | `scripts/setup-mtls.sh` | Generate CA, server cert, client cert, mobileconfig, dnsmasq snippet |
 | `scripts/setup_caddy.py --provision` | Install certs, generate Caddyfile, restart Caddy, enable linger |
+| `scripts/render_private_site_inventory.py` | Render the merged private-site inventory as local Markdown |
 | `scripts/export_mtls_profile.py` | Issue a per-device client cert and stage mobileconfig |
 | `scripts/deploy_snowbridge_filebrowser_fork_image.sh` | Build Snowbridge's patched File Browser image, update its env file, and recreate only the backend container |
 

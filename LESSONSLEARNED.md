@@ -36,3 +36,15 @@ Tracked durable lessons for `wiring-harness`.
 - Keep a single canonical hostname per service in `services.toml` unless a
   second hostname is intentionally required; typo-compat aliases expand the
   TLS SAN surface area and can linger longer than intended.
+- If sibling repos need private hostnames for browser/admin surfaces, put those
+  hostnames in the merged `services.toml` / `services.local.toml` registry and
+  have the sibling repo consume the registry instead of maintaining a second
+  hostname list in its own config file.
+- When a private host works from host-side `curl --resolve ... --cert ...` but
+  fails from an iPhone over WireGuard, compare the generated
+  `~/.config/wiring-harness/dnsmasq-wiring-harness.conf` with the live
+  `/etc/dnsmasq.d/` files. A correct local registry plus an uninstalled dnsmasq
+  snippet leaves Caddy and certs healthy while mobile clients still cannot
+  resolve the hostname.
+- When Gmail MCP tools are unavailable or disconnected, send email via
+  shock-relay: `python3 /mnt/4tb-m2/git/util-repos/shock-relay/services/gmail-imap/send_email.py <to> <subject> <body>`
