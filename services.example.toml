@@ -63,4 +63,5 @@ owner_repo  = "./util-repos/my-admin"
 hostname    = "admin.home.internal"
 access_mode = "vpn-only-direct"
 ingress     = "direct"
+# Optional: set url_scheme = "rdp" for non-HTTPS direct services.
 port        = 9090

@@ -94,12 +94,13 @@ def site_url(site: dict) -> str:
     """Return the user-facing URL for a site inventory entry."""
     hostname = site["hostname"]
     ingress = site.get("ingress")
+    scheme = site.get("url_scheme", "https")
     port = site.get("inventory_port", site.get("port"))
     if ingress == "direct" and port:
         port_num = int(port)
         if port_num not in (80, 443):
-            return f"https://{hostname}:{port_num}"
-    return f"https://{hostname}"
+            return f"{scheme}://{hostname}:{port_num}"
+    return f"{scheme}://{hostname}"
 
 
 def render_inventory_markdown(sites: list[dict], services_path: Path = DEFAULT_SERVICES_TOML) -> str:

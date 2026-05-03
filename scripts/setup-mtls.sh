@@ -12,15 +12,43 @@
 #   bash scripts/setup-mtls.sh                   # install/re-provision; skip cert gen if certs exist
 #   bash scripts/setup-mtls.sh --refresh-server  # regenerate server cert only (new SANs, same CA/clients)
 #   bash scripts/setup-mtls.sh --rotate          # force-regenerate all certs (new CA, server, clients)
+#   bash scripts/setup-mtls.sh --refresh-server --skip-device-profiles
 #   WH_WG_IP=10.99.0.1 bash scripts/setup-mtls.sh
 set -euo pipefail
 
+usage() {
+  cat <<'USAGE'
+Usage:
+  bash scripts/setup-mtls.sh [options]
+
+Options:
+  --refresh-server        Regenerate server cert only with current SANs
+  --rotate                Force-regenerate all certs with a new CA
+  --skip-device-profiles  Do not run export_mtls_profile.py at the end
+  -h, --help              Show this help
+
+Environment:
+  WH_WG_IP                WireGuard server IP for server cert SAN and dnsmasq records
+  WH_CERT_DIR             User cert directory
+USAGE
+}
+
 ROTATE=0
 REFRESH_SERVER=0
+SKIP_DEVICE_PROFILES=0
 for arg in "$@"; do
   case "$arg" in
     --rotate)         ROTATE=1 ;;
     --refresh-server) REFRESH_SERVER=1 ;;
+    --skip-device-profiles) SKIP_DEVICE_PROFILES=1 ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "error: unknown argument: $arg" >&2
+      exit 2
+      ;;
   esac
 done
 
@@ -195,7 +223,10 @@ echo "  sudo python3 scripts/setup_caddy.py --provision"
 # ── 7. Per-device profiles for all registered devices ─────────────────────────
 EXPORT_SCRIPT="$REPO_ROOT/scripts/export_mtls_profile.py"
 DEVICES_TOML="$REPO_ROOT/devices.toml"
-if [ -f "$EXPORT_SCRIPT" ] && [ -f "$DEVICES_TOML" ]; then
+if [ "$SKIP_DEVICE_PROFILES" -eq 1 ]; then
+  echo ""
+  echo "==> Skipping per-device profile export (--skip-device-profiles)."
+elif [ -f "$EXPORT_SCRIPT" ] && [ -f "$DEVICES_TOML" ]; then
   echo ""
   echo "==> Issuing per-device profiles (devices.toml)..."
   if sudo python3 "$EXPORT_SCRIPT" --all-devices \
