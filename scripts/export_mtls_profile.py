@@ -43,6 +43,10 @@ REPO_ROOT = SCRIPT_DIR.parent
 
 DEFAULT_DEVICES_TOML = REPO_ROOT / "devices.toml"
 DEFAULT_SHARE_TMP = Path("/srv/snowbridge/share/tmp")
+DEFAULT_SIGNAL_CONFIG = REPO_ROOT.parent / "shock-relay" / "services" / "signal-cli" / "config.local.yaml"
+DEFAULT_EMAIL_CONFIG = REPO_ROOT.parent / "shock-relay" / "services" / "gmail-imap" / "config.local.yaml"
+DEFAULT_EMAIL_SCRIPT = REPO_ROOT.parent / "shock-relay" / "services" / "gmail-imap" / "send_email.py"
+SNOWBRIDGE_FILES_URL = "https://files.snowbridge.internal/files/tmp/"
 DEFAULT_OWNER = "snowbridge"
 DEFAULT_GROUP = "snowbridge"
 DEFAULT_PROFILE_IDENTIFIER_PREFIX = "local.wiring-harness.mtls"
@@ -125,6 +129,8 @@ class DeviceSpec:
     name: str
     type: str    # "desktop" | "mobile"
     platform: str  # "linux" | "ios" | "macos" | …
+    notify_phone: str | None = None   # E.164 number to notify via Signal after staging
+    notify_email: str | None = None   # email address to notify after staging
 
 
 def log(message: str) -> None:
@@ -133,6 +139,143 @@ def log(message: str) -> None:
 
 def fail(message: str) -> NoReturn:
     raise SetupError(message)
+
+
+def _signal_send(recipient: str, message: str, config_path: Path) -> bool:
+    """Send a Signal message via signal-cli. Returns True on success (non-fatal on failure)."""
+    try:
+        text = config_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        log(f"  [notify] cannot read signal config {config_path}: {exc}")
+        return False
+
+    account = ""
+    bus_name: str | None = None
+    in_block = False
+    base_indent: int | None = None
+    for line in text.splitlines():
+        if not in_block:
+            if re.match(r"^\s*signal_cli:\s*$", line):
+                in_block = True
+                base_indent = len(line) - len(line.lstrip())
+            continue
+        if line.strip() and base_indent is not None and len(line) - len(line.lstrip()) <= base_indent:
+            break
+        m = re.match(r"^\s*account:\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s#]+))", line)
+        if m:
+            account = next(v for v in m.groups() if v is not None)
+            continue
+        m = re.match(r"^\s*bus_name:\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s#]+))", line)
+        if m:
+            bus_name = next(v for v in m.groups() if v is not None) or None
+
+    if not account:
+        log(f"  [notify] no signal_cli.account in {config_path}")
+        return False
+
+    signal_cmd = ["signal-cli", "-a", account]
+    if bus_name:
+        signal_cmd.extend(["--bus-name", bus_name])
+    signal_cmd.extend(["send", "-m", message, recipient])
+
+    # When running as root (sudo), signal-cli needs the invoking user's D-Bus session.
+    sudo_user = os.environ.get("SUDO_USER")
+    if os.geteuid() == 0 and sudo_user:
+        try:
+            import pwd as _pwd
+            uid = _pwd.getpwnam(sudo_user).pw_uid
+            dbus_addr = f"unix:path=/run/user/{uid}/bus"
+        except KeyError:
+            dbus_addr = None
+        env_prefix = ["env", f"DBUS_SESSION_BUS_ADDRESS={dbus_addr}"] if dbus_addr else []
+        cmd = ["runuser", "-u", sudo_user, "--"] + env_prefix + signal_cmd
+    else:
+        cmd = signal_cmd
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            log(f"  [notify] signal-cli failed: {result.stderr.strip()}")
+            return False
+        return True
+    except FileNotFoundError:
+        log("  [notify] signal-cli not found in PATH")
+        return False
+    except OSError as exc:
+        log(f"  [notify] signal-cli error: {exc}")
+        return False
+
+
+def _email_send(to: str, subject: str, body: str, config_path: Path) -> bool:
+    """Send an email via shock-relay gmail. Returns True on success (non-fatal on failure)."""
+    script = DEFAULT_EMAIL_SCRIPT
+    if not script.is_file():
+        log(f"  [notify] email script not found: {script}")
+        return False
+
+    cmd = [sys.executable, str(script), "--config", str(config_path), to, subject, body]
+
+    sudo_user = os.environ.get("SUDO_USER")
+    if os.geteuid() == 0 and sudo_user:
+        try:
+            import pwd as _pwd
+            uid = _pwd.getpwnam(sudo_user).pw_uid
+            dbus_addr = f"unix:path=/run/user/{uid}/bus"
+        except KeyError:
+            dbus_addr = None
+        env_prefix = ["env", f"DBUS_SESSION_BUS_ADDRESS={dbus_addr}"] if dbus_addr else []
+        cmd = ["runuser", "-u", sudo_user, "--"] + env_prefix + cmd
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            log(f"  [notify] email failed: {result.stderr.strip()}")
+            return False
+        return True
+    except (FileNotFoundError, OSError) as exc:
+        log(f"  [notify] email error: {exc}")
+        return False
+
+
+def _notify_mobile(
+    *,
+    device: DeviceSpec,
+    passphrase: str,
+    extra_p12s: list[ExtraP12] | None,
+    signal_config: Path | None,
+    email_config: Path | None,
+) -> None:
+    if not device.notify_phone and not device.notify_email:
+        return
+    lines = [
+        f"mTLS cert rotated — {device.name}",
+        "",
+        f"p12 passphrase: {passphrase}",
+    ]
+    for extra in (extra_p12s or []):
+        lines.append(f"{extra.display_name} passphrase: {extra.passphrase}")
+    lines += ["", "Pick up your profile at:", SNOWBRIDGE_FILES_URL]
+    message = "\n".join(lines)
+    if device.notify_phone:
+        if signal_config is None or not signal_config.is_file():
+            log(f"  [notify] no signal config found — set --signal-config or add {DEFAULT_SIGNAL_CONFIG}")
+        else:
+            ok = _signal_send(device.notify_phone, message, signal_config)
+            if ok:
+                log(f"  [notify] Signal sent to {device.notify_phone}")
+            else:
+                log(f"  [notify] Signal delivery failed — check signal-cli and bus-name config")
+
+    if device.notify_email:
+        if email_config is None or not email_config.is_file():
+            log(f"  [notify] no email config found — set --email-config or add {DEFAULT_EMAIL_CONFIG}")
+        else:
+            subject = f"[wiring-harness/provision] mTLS cert rotated — {device.name}"
+            ok = _email_send(device.notify_email, subject, message, email_config)
+            if ok:
+                log(f"  [notify] email sent to {device.notify_email}")
+            else:
+                log(f"  [notify] email delivery failed — check shock-relay gmail config")
 
 
 def require_root() -> None:
@@ -255,6 +398,8 @@ def load_devices(path: Path) -> list[DeviceSpec]:
             name=entry["name"],
             type=entry.get("type", "mobile"),
             platform=entry.get("platform", "ios"),
+            notify_phone=entry.get("notify_phone") or None,
+            notify_email=entry.get("notify_email") or None,
         ))
     return devices
 
@@ -610,6 +755,31 @@ def build_mobileconfig(
     return plistlib.dumps(profile, fmt=plistlib.FMT_XML, sort_keys=False)
 
 
+def sign_mobileconfig(plist_bytes: bytes, signer_cert: Path, signer_key: Path, ca_cert: Path) -> bytes:
+    """CMS-sign a mobileconfig plist. Returns DER-encoded signed data."""
+    with tempfile.NamedTemporaryFile(suffix=".plist", delete=False) as f:
+        f.write(plist_bytes)
+        plist_path = Path(f.name)
+    try:
+        result = subprocess.run(
+            [
+                "openssl", "cms", "-sign",
+                "-in", str(plist_path),
+                "-nodetach",
+                "-certfile", str(ca_cert),
+                "-signer", str(signer_cert),
+                "-inkey", str(signer_key),
+                "-outform", "der",
+            ],
+            capture_output=True,
+        )
+        if result.returncode != 0:
+            raise SetupError(f"openssl cms signing failed: {result.stderr.decode().strip()}")
+        return result.stdout
+    finally:
+        plist_path.unlink(missing_ok=True)
+
+
 def stage_mobile_profile(
     *,
     ca_cert: Path,
@@ -621,6 +791,8 @@ def stage_mobile_profile(
     ownership: Ownership,
     dry_run: bool,
     extra_p12s: list[ExtraP12] | None = None,
+    signing_cert: Path | None = None,
+    signing_key: Path | None = None,
 ) -> None:
     ca_cert_der = load_certificate_der(ca_cert)
     p12_bytes = identity.p12_path.read_bytes()
@@ -631,6 +803,9 @@ def stage_mobile_profile(
         p12_file_name=identity.p12_path.name, ca_cert_file_name=ca_cert.name,
         extra_p12s=extra_p12s,
     )
+    if signing_cert and signing_key and signing_cert.is_file() and signing_key.is_file():
+        mobileconfig = sign_mobileconfig(mobileconfig, signing_cert, signing_key, ca_cert)
+        log("  signed mobileconfig (CMS)")
     write_file(identity.staged_profile_path, mobileconfig, 0o644, ownership, dry_run)
     copy_file(identity.p12_path, identity.staged_p12_path, 0o640, ownership, dry_run)
     log(f"  staged {identity.staged_profile_path.name}")
@@ -775,6 +950,10 @@ def export_device(
     snowbridge_ca_key: Path = SNOWBRIDGE_CA_KEY,
     snowbridge_issued_dir: Path = SNOWBRIDGE_ISSUED_DIR,
     no_snowbridge: bool = False,
+    signal_config: Path | None = None,
+    email_config: Path | None = None,
+    signing_cert: Path | None = None,
+    signing_key: Path | None = None,
 ) -> None:
     log(f"\n── {device.name} ({device.type}/{device.platform}) ──")
     identity = build_identity_paths(device.name, issued_dir, output, p12_output)
@@ -814,6 +993,12 @@ def export_device(
             profile_identifier=profile_identifier, profile_name=profile_name,
             organization=organization, ownership=ownership, dry_run=dry_run,
             extra_p12s=extra_p12s or None,
+            signing_cert=signing_cert, signing_key=signing_key,
+        )
+        _notify_mobile(
+            device=device, passphrase=passphrase,
+            extra_p12s=extra_p12s or None,
+            signal_config=signal_config, email_config=email_config,
         )
 
 
@@ -871,6 +1056,23 @@ def parse_args() -> argparse.Namespace:
                         help=f"Directory for snowbridge-issued client identities. Default: {SNOWBRIDGE_ISSUED_DIR}")
     parser.add_argument("--no-snowbridge", action="store_true",
                         help="Skip the snowbridge filebrowser client identity payload.")
+    parser.add_argument("--signal-config", default=None, metavar="PATH",
+                        help=f"Path to shock-relay signal-cli config.local.yaml. "
+                             f"Default: {DEFAULT_SIGNAL_CONFIG}")
+    parser.add_argument("--email-config", default=None, metavar="PATH",
+                        help=f"Path to shock-relay gmail-imap config.local.yaml. "
+                             f"Default: {DEFAULT_EMAIL_CONFIG}")
+    parser.add_argument("--signing-cert", default=None, metavar="PATH",
+                        help="Certificate to CMS-sign the mobileconfig. Default: CA cert.")
+    parser.add_argument("--signing-key", default=None, metavar="PATH",
+                        help="Private key for CMS signing. Default: CA key.")
+    parser.add_argument("--no-sign", action="store_true",
+                        help="Skip CMS signing of the mobileconfig.")
+    parser.add_argument("--no-notify", action="store_true",
+                        help="Skip all notifications even if notify_phone/notify_email are set.")
+    parser.add_argument("--keepass", action="store_true",
+                        help="Export passphrases to KeePassXC after staging "
+                             "(calls export_mtls_passwords_to_keepass.py).")
     return parser.parse_args()
 
 
@@ -884,6 +1086,19 @@ def main() -> int:
     sb_ca_cert = Path(args.snowbridge_ca_cert).expanduser().resolve() if args.snowbridge_ca_cert else SNOWBRIDGE_CA_CERT
     sb_ca_key = Path(args.snowbridge_ca_key).expanduser().resolve() if args.snowbridge_ca_key else SNOWBRIDGE_CA_KEY
     sb_issued_dir = Path(args.snowbridge_issued_dir).expanduser().resolve() if args.snowbridge_issued_dir else SNOWBRIDGE_ISSUED_DIR
+    signal_config: Path | None = None
+    email_config: Path | None = None
+    if not args.no_notify:
+        raw = args.signal_config
+        signal_config = Path(raw).expanduser().resolve() if raw else DEFAULT_SIGNAL_CONFIG
+        raw_email = args.email_config
+        email_config = Path(raw_email).expanduser().resolve() if raw_email else DEFAULT_EMAIL_CONFIG
+
+    signing_cert: Path | None = None
+    signing_key: Path | None = None
+    if not args.no_sign:
+        signing_cert = Path(args.signing_cert).expanduser().resolve() if args.signing_cert else ca_cert
+        signing_key = Path(args.signing_key).expanduser().resolve() if args.signing_key else ca_key
 
     try:
         if not args.dry_run:
@@ -911,6 +1126,8 @@ def main() -> int:
                     organization=args.organization, rotate=args.rotate, dry_run=args.dry_run,
                     snowbridge_ca_cert=sb_ca_cert, snowbridge_ca_key=sb_ca_key,
                     snowbridge_issued_dir=sb_issued_dir, no_snowbridge=args.no_snowbridge,
+                    signal_config=signal_config, email_config=email_config,
+                    signing_cert=signing_cert, signing_key=signing_key,
                 )
                 if device.type == "desktop":
                     has_desktop = True
@@ -932,9 +1149,25 @@ def main() -> int:
                 passphrase_override=args.identity_passphrase,
                 snowbridge_ca_cert=sb_ca_cert, snowbridge_ca_key=sb_ca_key,
                 snowbridge_issued_dir=sb_issued_dir, no_snowbridge=args.no_snowbridge,
+                signal_config=signal_config, email_config=email_config,
+                signing_cert=signing_cert, signing_key=signing_key,
             )
             if device.type == "desktop":
                 has_desktop = True
+
+        if args.keepass and not args.dry_run:
+            log("\n==> Exporting passphrases to KeePassXC...")
+            keepass_script = SCRIPT_DIR / "export_mtls_passwords_to_keepass.py"
+            kp_cmd = [sys.executable, str(keepass_script), "--keepass-profile", "infra"]
+            if sb_issued_dir != SNOWBRIDGE_ISSUED_DIR:
+                kp_cmd += ["--snowbridge-issued-dir", str(sb_issued_dir)]
+            auto_pass_src = str(REPO_ROOT.parent / "auto-pass" / "src")
+            kp_env = os.environ.copy()
+            existing = kp_env.get("PYTHONPATH", "")
+            kp_env["PYTHONPATH"] = f"{auto_pass_src}:{existing}" if existing else auto_pass_src
+            kp_result = subprocess.run(kp_cmd, capture_output=False, env=kp_env)
+            if kp_result.returncode != 0:
+                log("  [keepass] export finished with errors — check output above")
 
         if has_desktop and not args.dry_run:
             log("\n==> Restarting browsers to pick up NSS changes...")

@@ -28,16 +28,24 @@ systemd unit management (each service repo handles its own).
 ```bash
 # 1. Edit services.toml / services.local.toml to register your private sites
 
-# 2. Generate CA, server cert, client cert, and iOS mobileconfig
+# 2. Apply site registry changes end to end
+scripts/apply_site_changes.sh
+```
+
+For first-time setup, or when you intentionally need to export fresh device
+profiles, run the lower-level commands directly:
+
+```bash
+# Generate CA, server cert, client cert, and iOS mobileconfig
 WH_WG_IP=10.99.0.1 bash scripts/setup-mtls.sh
 
-# 3. Install Caddyfile, copy certs, restart Caddy, enable linger
+# Install Caddyfile, copy certs, restart Caddy, enable linger
 sudo python3 scripts/setup_caddy.py --provision
 
-# 4. Refresh the local inventory report (optional standalone step)
+# Refresh the local inventory report (optional standalone step)
 python3 scripts/render_private_site_inventory.py
 
-# 5. Issue a per-device mobileconfig (repeat for each device)
+# Issue a per-device mobileconfig (repeat for each device)
 sudo python3 scripts/export_mtls_profile.py --device-name iphone
 ```
 
@@ -63,10 +71,12 @@ or `ingress = "direct"` instead.
 Then re-run provisioning:
 
 ```bash
-WH_WG_IP=10.99.0.1 bash scripts/setup-mtls.sh   # regenerates server cert SANs
-sudo python3 scripts/setup_caddy.py --provision
-python3 scripts/render_private_site_inventory.py
+scripts/apply_site_changes.sh
 ```
+
+That refreshes the shared server cert SANs without rotating the CA, installs
+the generated dnsmasq records, provisions Caddy, writes the local inventory,
+and verifies each private hostname resolves to the WireGuard server IP.
 
 ## Service Registry (`services.toml`)
 
@@ -82,6 +92,7 @@ python3 scripts/render_private_site_inventory.py
 | `port_env_key` | Env var name to read port from `env_file` |
 | `port_default` | Fallback port when env lookup finds nothing |
 | `env_file` | Path to env file for port lookup |
+| `url_scheme` | Optional inventory URL scheme for non-HTTPS direct services, for example `rdp` |
 | `client_ca_path` | Override client CA; omit to use the shared wiring-harness CA |
 | `proxy_headers` | Extra headers injected by Caddy into the upstream request |
 | `dns_enabled` | Optional override; defaults to `true` for VPN DNS publication |
@@ -120,6 +131,7 @@ System certs (readable by Caddy) are installed to `/etc/caddy/certs/wiring-harne
 
 | Script | Purpose |
 |---|---|
+| `scripts/apply_site_changes.sh` | Fast one-command path after editing the private-site registry: refresh server cert SANs, install dnsmasq records, provision Caddy, and verify VPN DNS |
 | `scripts/setup-mtls.sh` | Generate CA, server cert, client cert, mobileconfig, dnsmasq snippet |
 | `scripts/setup_caddy.py --provision` | Install certs, generate Caddyfile, restart Caddy, enable linger |
 | `scripts/render_private_site_inventory.py` | Render the merged private-site inventory as local Markdown |
@@ -147,5 +159,5 @@ If you changed `services.toml`, certs, hostnames, or the backend port, follow
 the backend deploy with:
 
 ```bash
-sudo python3 scripts/setup_caddy.py --provision
+scripts/apply_site_changes.sh --skip-mtls
 ```

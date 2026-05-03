@@ -12,6 +12,7 @@ type     = "desktop"
 platform = "linux"
 
 [[devices]]
-name     = "my-phone"
-type     = "mobile"
-platform = "ios"
+name         = "my-phone"
+type         = "mobile"
+platform     = "ios"
+# notify_phone = "+15551234567"  # E.164 number — receives Signal notification after cert staging
