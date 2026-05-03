@@ -2,6 +2,8 @@
 set namespaceSeparator none
 class "DeviceSpec" as export_mtls_profile.DeviceSpec {
   name : str
+  notify_email : str | None
+  notify_phone : str | None
   platform : str
   type : str
 }
