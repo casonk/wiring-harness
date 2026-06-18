@@ -47,4 +47,5 @@ Tracked durable lessons for `wiring-harness`.
   snippet leaves Caddy and certs healthy while mobile clients still cannot
   resolve the hostname.
 - When Gmail MCP tools are unavailable or disconnected, send email via
-  shock-relay: `python3 /mnt/4tb-m2/git/util-repos/shock-relay/services/gmail-imap/send_email.py <to> <subject> <body>`
+  shock-relay: `python3 "$SHOCK_RELAY_ROOT/services/gmail-imap/send_email.py" <to> <subject> <body>`
+  where `SHOCK_RELAY_ROOT` is the local path to the sibling shock-relay repo.
