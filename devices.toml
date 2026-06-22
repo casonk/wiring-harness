@@ -1,8 +1,11 @@
 # wiring-harness device registry
 #
 # Each [[devices]] entry receives its own per-device client certificate.
-# type = "desktop"  → cert installed to local browser NSS databases (Firefox, Chromium)
-# type = "mobile"   → mobileconfig + p12 staged to /srv/snowbridge/share/tmp/
+# delivery = "local-browser-install" → cert installed to local browser NSS
+#                                      databases (Firefox, Chromium) on the
+#                                      machine running the script
+# delivery = "apple-profile"         → mobileconfig + p12 staged to
+#                                      /srv/snowbridge/share/tmp/
 #
 # Run `sudo python3 scripts/export_mtls_profile.py --all-devices` to regenerate
 # profiles for every device in this file.
