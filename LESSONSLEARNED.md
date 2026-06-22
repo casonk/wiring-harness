@@ -49,3 +49,13 @@ Tracked durable lessons for `wiring-harness`.
 - When Gmail MCP tools are unavailable or disconnected, send email via
   shock-relay: `python3 "$SHOCK_RELAY_ROOT/services/gmail-imap/send_email.py" <to> <subject> <body>`
   where `SHOCK_RELAY_ROOT` is the local path to the sibling shock-relay repo.
+- Per-device certificate exports should ship a local inspection helper that
+  resolves the real staged filenames and validates each PKCS#12 passphrase
+  against the actual artifact; filename drift and multi-identity Apple profiles
+  are too error-prone for ad hoc shell commands.
+- If a low-level export tool already supports a safe restage path, expose that
+  path as a first-class repo helper instead of making users remember internal
+  flags and behavior.
+- When a schema field actually describes delivery mechanics rather than device
+  class, name it for the behavior (`delivery`) instead of overloading a
+  misleading label like `type`.

@@ -45,8 +45,14 @@ sudo python3 scripts/setup_caddy.py --provision
 # Refresh the local inventory report (optional standalone step)
 python3 scripts/render_private_site_inventory.py
 
-# Issue a per-device mobileconfig (repeat for each device)
+# Issue a per-device Apple profile (repeat for each device)
 sudo python3 scripts/export_mtls_profile.py --device-name iphone
+
+# Restage an existing device profile without rotating its identity
+sudo python3 scripts/restage_mtls_device.py --device-name iphone --show-passwords
+
+# Inspect a device's actual artifact names and verify the PKCS#12 passwords
+sudo python3 scripts/inspect_mtls_device.py --device-name iphone --show-passwords
 ```
 
 ## Adding a New Private Site
@@ -125,6 +131,23 @@ By default this writes `config/private-sites.inventory.local.md` (gitignored).
     └── wiring-harness-mtls-<device>.*
 ```
 
+## Device Registry
+
+`devices.toml` and gitignored `devices.local.toml` use `delivery` to describe
+how the identity should be handed to the device:
+
+- `delivery = "local-browser-install"`: install into local Firefox/Chromium NSS
+  databases on the Linux machine running the script
+- `delivery = "apple-profile"`: stage an Apple `mobileconfig` and PKCS#12
+  bundle for import on iPhone, iPad, or macOS
+
+Legacy `type = "desktop"` / `type = "mobile"` entries are still accepted as a
+compatibility alias, but new or edited entries should use `delivery`.
+
+When a device also needs Snowbridge's separate client CA, the export/restage
+flow stages the Snowbridge PKCS#12 bundle alongside the main
+`wiring-harness-mtls-<device>.p12` artifact.
+
 System certs (readable by Caddy) are installed to `/etc/caddy/certs/wiring-harness/`.
 
 ## Scripts
@@ -136,6 +159,8 @@ System certs (readable by Caddy) are installed to `/etc/caddy/certs/wiring-harne
 | `scripts/setup_caddy.py --provision` | Install certs, generate Caddyfile, restart Caddy, enable linger |
 | `scripts/render_private_site_inventory.py` | Render the merged private-site inventory as local Markdown |
 | `scripts/export_mtls_profile.py` | Issue a per-device client cert and stage mobileconfig |
+| `scripts/restage_mtls_device.py` | Rebuild and re-copy an existing device's staged profile artifacts without rotating the identity |
+| `scripts/inspect_mtls_device.py` | Resolve a device's artifact paths and verify PKCS#12 import passwords |
 | `scripts/deploy_snowbridge_filebrowser_fork_image.sh` | Build Snowbridge's patched File Browser image, update its env file, and recreate only the backend container |
 
 ## Snowbridge Backend Deploys

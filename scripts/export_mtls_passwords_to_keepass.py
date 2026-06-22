@@ -100,9 +100,9 @@ def main() -> int:
     )
     parser.add_argument(
         "--keepass-profile",
-        default="infra",
+        default="",
         metavar="PROFILE",
-        help="auto-pass KeePass profile to use (default: infra)",
+        help="auto-pass KeePass profile to use (default: use the ambient auto-pass profile)",
     )
     parser.add_argument(
         "--snowbridge-issued-dir",
@@ -140,7 +140,8 @@ def main() -> int:
     else:
         print(f"  note: env file not found at {env_file}, relying on environment variables")
 
-    os.environ["AUTO_PASS_PROFILE"] = args.keepass_profile
+    if args.keepass_profile:
+        os.environ["AUTO_PASS_PROFILE"] = args.keepass_profile
 
     group = args.group.strip("/")
     errors: list[str] = []
