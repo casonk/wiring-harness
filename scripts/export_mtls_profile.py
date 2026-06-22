@@ -2,12 +2,13 @@
 """Generate per-device mTLS identity profiles for all registered devices.
 
 Issues a per-device client cert signed by the wiring-harness CA for each entry
-in devices.toml, then delivers it according to device type:
+in devices.toml, then delivers it according to delivery mode:
 
-  desktop  — installs CA trust and per-device identity into Firefox and Chromium
-             NSS databases on this machine
-  mobile   — stages a .mobileconfig + .p12 to /srv/snowbridge/share/tmp/ for
-             pickup via the snowbridge SMB share
+  local-browser-install  — installs CA trust and per-device identity into
+                           Firefox and Chromium NSS databases on this machine
+  apple-profile          — stages a .mobileconfig + .p12 to
+                           /srv/snowbridge/share/tmp/ for pickup via the
+                           snowbridge SMB share
 
 Usage:
     sudo python3 scripts/export_mtls_profile.py --all-devices
@@ -127,10 +128,24 @@ class IdentityPaths:
 @dataclass(frozen=True)
 class DeviceSpec:
     name: str
-    type: str    # "desktop" | "mobile"
+    delivery: str  # "local-browser-install" | "apple-profile"
     platform: str  # "linux" | "ios" | "macos" | …
     notify_phone: str | None = None   # E.164 number to notify via Signal after staging
     notify_email: str | None = None   # email address to notify after staging
+
+
+def normalize_delivery(raw_delivery: str | None, legacy_type: str | None) -> str:
+    if raw_delivery:
+        if raw_delivery in ("local-browser-install", "apple-profile"):
+            return raw_delivery
+        fail(f"unsupported delivery mode: {raw_delivery}")
+    if legacy_type:
+        if legacy_type == "desktop":
+            return "local-browser-install"
+        if legacy_type == "mobile":
+            return "apple-profile"
+        fail(f"unsupported legacy device type: {legacy_type}")
+    return "apple-profile"
 
 
 def log(message: str) -> None:
@@ -396,7 +411,7 @@ def load_devices(path: Path) -> list[DeviceSpec]:
     for entry in data.get("devices", []):
         devices.append(DeviceSpec(
             name=entry["name"],
-            type=entry.get("type", "mobile"),
+            delivery=normalize_delivery(entry.get("delivery"), entry.get("type")),
             platform=entry.get("platform", "ios"),
             notify_phone=entry.get("notify_phone") or None,
             notify_email=entry.get("notify_email") or None,
@@ -808,8 +823,13 @@ def stage_mobile_profile(
         log("  signed mobileconfig (CMS)")
     write_file(identity.staged_profile_path, mobileconfig, 0o644, ownership, dry_run)
     copy_file(identity.p12_path, identity.staged_p12_path, 0o640, ownership, dry_run)
+    for extra in (extra_p12s or []):
+        staged_extra_path = identity.staged_p12_path.parent / extra.p12_file_name
+        write_file(staged_extra_path, extra.p12_bytes, 0o640, ownership, dry_run)
     log(f"  staged {identity.staged_profile_path.name}")
     log(f"  staged {identity.staged_p12_path.name}")
+    for extra in (extra_p12s or []):
+        log(f"  staged {extra.p12_file_name}")
     log(f"  wiring-harness identity import password: {identity.passphrase_path.read_text().strip()}")
     for extra in (extra_p12s or []):
         log(f"  {extra.display_name} import password: {extra.passphrase}")
@@ -955,7 +975,7 @@ def export_device(
     signing_cert: Path | None = None,
     signing_key: Path | None = None,
 ) -> None:
-    log(f"\n── {device.name} ({device.type}/{device.platform}) ──")
+    log(f"\n── {device.name} ({device.delivery}/{device.platform}) ──")
     identity = build_identity_paths(device.name, issued_dir, output, p12_output)
     passphrase = load_or_create_passphrase(
         identity.passphrase_path, passphrase_override, rotate, dry_run
@@ -967,13 +987,13 @@ def export_device(
     )
 
     if dry_run:
-        log(f"  would deliver for {device.type}")
+        log(f"  would deliver for {device.delivery}")
         return
 
     profile_identifier = f"{profile_identifier_prefix}.{identity.slug}"
     profile_name = f"Wiring Harness mTLS ({device.name})"
 
-    if device.type == "desktop":
+    if device.delivery == "local-browser-install":
         install_to_nss(
             ca_cert=ca_cert, p12_path=identity.p12_path, passphrase=passphrase,
             device_name=device.name, home=_invoking_user_home(), dry_run=dry_run,
@@ -1022,8 +1042,12 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--devices", metavar="PATH", default=str(DEFAULT_DEVICES_TOML),
                         help=f"Path to devices.toml (default: {DEFAULT_DEVICES_TOML})")
-    parser.add_argument("--type", choices=["desktop", "mobile"], default="mobile",
-                        help="Device type when --device-name is used and not in devices.toml (default: mobile)")
+    parser.add_argument("--delivery", choices=["local-browser-install", "apple-profile"], default="apple-profile",
+                        help="Delivery mode when --device-name is used and not in devices.toml "
+                             "(default: apple-profile)")
+    parser.add_argument("--type", choices=["desktop", "mobile"], default=None,
+                        help="Legacy alias for --delivery. desktop -> local-browser-install; "
+                             "mobile -> apple-profile")
     parser.add_argument("--platform", default="ios",
                         help="Platform when --device-name is used and not in devices.toml (default: ios)")
     parser.add_argument("--ca-cert", default=None,
@@ -1129,7 +1153,7 @@ def main() -> int:
                     signal_config=signal_config, email_config=email_config,
                     signing_cert=signing_cert, signing_key=signing_key,
                 )
-                if device.type == "desktop":
+                if device.delivery == "local-browser-install":
                     has_desktop = True
         else:
             # Single device: look it up in devices.toml if it exists, else use CLI args
@@ -1140,7 +1164,11 @@ def main() -> int:
                         device = d
                         break
             if device is None:
-                device = DeviceSpec(name=args.device_name, type=args.type, platform=args.platform)
+                device = DeviceSpec(
+                    name=args.device_name,
+                    delivery=normalize_delivery(args.delivery, args.type),
+                    platform=args.platform,
+                )
             export_device(
                 device=device, ca_cert=ca_cert, ca_key=ca_key, issued_dir=issued_dir,
                 ownership=ownership, profile_identifier_prefix=args.profile_identifier_prefix,
@@ -1152,7 +1180,7 @@ def main() -> int:
                 signal_config=signal_config, email_config=email_config,
                 signing_cert=signing_cert, signing_key=signing_key,
             )
-            if device.type == "desktop":
+            if device.delivery == "local-browser-install":
                 has_desktop = True
 
         if args.keepass and not args.dry_run:
