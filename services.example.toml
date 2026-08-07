@@ -20,6 +20,16 @@ access_mode = "shared-mtls"
 ingress     = "wiring-harness-caddy"
 port        = 3000
 
+# Root-created Unix socket shared only with the Caddy service group:
+[[services]]
+name        = "nordility"
+description = "NordVPN outbound control surface"
+owner_repo  = "./util-repos/nordility"
+hostname    = "nordility.clockwork.internal"
+access_mode = "shared-mtls"
+ingress     = "wiring-harness-caddy"
+unix_socket = "/run/nordility/web.sock"
+
 # Service whose port is read from an env file:
 [[services]]
 name         = "my-service"

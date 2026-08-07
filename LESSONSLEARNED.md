@@ -59,3 +59,6 @@ Tracked durable lessons for `wiring-harness`.
 - When a schema field actually describes delivery mechanics rather than device
   class, name it for the behavior (`delivery`) instead of overloading a
   misleading label like `type`.
+- Privileged control backends should expose a group-permissioned Unix socket to
+  shared Caddy. Treat TCP ports and Unix sockets as mutually exclusive registry
+  upstream types, and validate the complete target before rendering Caddy.

@@ -34,10 +34,11 @@ import argparse
 import contextlib
 import os
 import pwd
+import re
 import shutil
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from site_registry import (
     caddy_managed_sites,
@@ -59,6 +60,7 @@ HOSTS_FILE = Path("/etc/hosts")
 DROPIN_IMPORT = "import /etc/caddy/Caddyfile.d/*.caddy"
 HOSTS_MARKER_BEGIN = "# wiring-harness BEGIN"
 HOSTS_MARKER_END = "# wiring-harness END"
+SAFE_UNIX_SOCKET = re.compile(r"/[A-Za-z0-9._@+/-]+\Z")
 
 
 def _run(cmd: list[str], timeout: int = 30) -> tuple[int, str]:
@@ -172,6 +174,28 @@ def _resolve_client_ca(svc: dict, system_certs_dir: Path) -> Path:
     return system_certs_dir / "ca.crt"
 
 
+def _resolve_proxy_target(svc: dict, home: Path) -> str:
+    """Return one validated TCP or Unix-socket Caddy upstream target."""
+    socket_raw = svc.get("unix_socket")
+    port_fields = {"port", "port_env_key", "port_default", "env_file"}
+    if socket_raw is None:
+        return f"127.0.0.1:{_resolve_port(svc, home)}"
+    if any(field in svc for field in port_fields):
+        raise ValueError(f"{svc['name']}: unix_socket cannot be combined with port fields")
+    if not isinstance(socket_raw, str):
+        raise ValueError(f"{svc['name']}: unix_socket must be a string")
+    if any(character.isspace() or ord(character) < 0x20 for character in socket_raw):
+        raise ValueError(f"{svc['name']}: unix_socket cannot contain whitespace or controls")
+    if SAFE_UNIX_SOCKET.fullmatch(socket_raw) is None:
+        raise ValueError(f"{svc['name']}: unix_socket contains unsupported Caddy characters")
+    socket_path = PurePosixPath(socket_raw)
+    if not socket_path.is_absolute() or ".." in socket_path.parts or socket_raw == "/":
+        raise ValueError(f"{svc['name']}: unix_socket must be an absolute canonical path")
+    if str(socket_path) != socket_raw:
+        raise ValueError(f"{svc['name']}: unix_socket must be an absolute canonical path")
+    return f"unix/{socket_raw}"
+
+
 # ---------------------------------------------------------------------------
 # Caddyfile generation
 # ---------------------------------------------------------------------------
@@ -217,12 +241,12 @@ def generate_caddyfile(services: list[dict], system_certs_dir: Path, home: Path)
     blocks: list[str] = []
     for svc in services:
         hostname = svc["hostname"]
-        port = _resolve_port(svc, home)
+        proxy_target = _resolve_proxy_target(svc, home)
         client_ca = str(_resolve_client_ca(svc, system_certs_dir))
         proxy_headers = dict(svc.get("proxy_headers") or {})
         blocks.append(
             f"# {svc['name']} — {hostname}\n"
-            + _site_block(hostname, cert, key, client_ca, f"127.0.0.1:{port}", proxy_headers)
+            + _site_block(hostname, cert, key, client_ca, proxy_target, proxy_headers)
         )
 
     return (
@@ -350,8 +374,7 @@ def provision(*, sites: list[dict], services_path: Path, user_certs_dir: Path, i
 
     print()
     for svc in services:
-        port = _resolve_port(svc, home)
-        print(f"  https://{svc['hostname']}  → 127.0.0.1:{port}")
+        print(f"  https://{svc['hostname']}  → {_resolve_proxy_target(svc, home)}")
     return 0
 
 
