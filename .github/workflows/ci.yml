@@ -9,4 +9,4 @@ jobs:
     with:
       python-versions: '["3.12"]'
       skip-install: true
-      run-pytest: false
+      run-pytest: true

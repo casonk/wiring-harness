@@ -2,7 +2,8 @@
 
 ## Runtime Flow
 
-1. `services.toml` declares the shared HTTPS backends and their hostnames.
+1. `services.toml` declares the shared HTTPS backends, their hostnames, and one
+   loopback-TCP or permissioned Unix-socket upstream.
 2. `scripts/setup-mtls.sh` generates or refreshes the shared CA, server
    certificate, client certificate, mobileconfig, and dnsmasq snippet.
 3. `scripts/setup_caddy.py --provision` reads the service registry, renders the
@@ -17,6 +18,8 @@
 - `services.toml` is the tracked source of truth for shared service ingress.
 - `scripts/setup-mtls.sh` owns certificate and profile generation.
 - `scripts/setup_caddy.py` owns Caddyfile rendering and system provisioning.
+  It rejects mixed TCP/Unix declarations and renders Unix backends with
+  Caddy's `unix//absolute/path.sock` address form.
 - `scripts/export_mtls_profile.py` owns per-device client-profile issuance.
 - `config/caddy/Caddyfile.example` and `config/dnsmasq/services.conf.example`
   show the expected generated shapes.
@@ -26,5 +29,7 @@
 - WireGuard tunnel creation stays in `short-circuit`.
 - SSH extensions stay in `pit-box`.
 - Service-local containers and systemd units stay in their own service repos.
+- Service repos own Unix-socket creation, modes, and group assignment; the
+  shared Caddy service must receive group traversal and connect permission.
 - Generated keys, certificates, PKCS12 bundles, and local device state are
   operational artifacts and must not be committed.

@@ -16,13 +16,13 @@ collections "Backend services\nclockwork, intake, snowbridge, tachometer" as bac
 database "Generated artifacts\ncerts, mobileconfigs, dnsmasq snippets" as artifacts
 
 operator --> registry : declare services
-registry --> caddy : hostnames + ports + CA overrides
+registry --> caddy : hostnames + TCP/Unix upstreams + CA overrides
 operator --> mtls : refresh trust material
 operator --> export : issue device profiles
 mtls --> artifacts : write certs + profiles
 export --> artifacts : stage per-device bundles
 caddy --> ingress : install config + restart
-ingress --> backends : reverse proxy
+ingress --> backends : loopback TCP or permissioned Unix socket
 mtls --> ingress : shared server certificate
 
 @enduml
