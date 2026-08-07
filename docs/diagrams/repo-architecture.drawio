@@ -14,7 +14,7 @@
         <mxCell id="mtls" value="setup-mtls.sh&#10;CA + server cert + mobileconfig" style="rounded=1;whiteSpace=wrap;html=1;overflow=hidden;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
           <mxGeometry x="220" y="180" width="220" height="82" as="geometry" />
         </mxCell>
-        <mxCell id="caddy" value="setup_caddy.py&#10;render + provision shared Caddy" style="rounded=1;whiteSpace=wrap;html=1;overflow=hidden;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+        <mxCell id="caddy" value="setup_caddy.py&#10;render + provision shared Caddy&#10;TCP or Unix upstream" style="rounded=1;whiteSpace=wrap;html=1;overflow=hidden;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
           <mxGeometry x="220" y="320" width="220" height="82" as="geometry" />
         </mxCell>
         <mxCell id="export" value="export_mtls_profile.py&#10;per-device client identities" style="rounded=1;whiteSpace=wrap;html=1;overflow=hidden;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
@@ -23,7 +23,7 @@
         <mxCell id="artifacts" value="Generated artifacts&#10;certs, mobileconfigs, dnsmasq snippets" style="rounded=1;whiteSpace=wrap;html=1;overflow=hidden;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
           <mxGeometry x="560" y="120" width="230" height="82" as="geometry" />
         </mxCell>
-        <mxCell id="ingress" value="Shared Caddy ingress&#10;80/443 + mTLS" style="rounded=1;whiteSpace=wrap;html=1;overflow=hidden;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
+        <mxCell id="ingress" value="Shared Caddy ingress&#10;80/443 + mTLS&#10;TCP / permissioned Unix socket" style="rounded=1;whiteSpace=wrap;html=1;overflow=hidden;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
           <mxGeometry x="560" y="300" width="180" height="70" as="geometry" />
         </mxCell>
         <mxCell id="backends" value="Backend services&#10;clockwork, intake, snowbridge, tachometer" style="rounded=1;whiteSpace=wrap;html=1;overflow=hidden;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">

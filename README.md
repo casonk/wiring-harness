@@ -70,6 +70,24 @@ ingress     = "wiring-harness-caddy"
 port        = 3000
 ```
 
+For a privileged backend that exposes only a permissioned Unix socket, use one
+absolute canonical path instead of any port fields:
+
+```toml
+[[services]]
+name        = "nordility"
+description = "NordVPN outbound control surface"
+owner_repo  = "./util-repos/nordility"
+hostname    = "nordility.clockwork.internal"
+access_mode = "shared-mtls"
+ingress     = "wiring-harness-caddy"
+unix_socket = "/run/nordility/web.sock"
+```
+
+The backend must make its socket and parent directory accessible to the
+`caddy` group. Do not also set `port`, `port_env_key`, `port_default`, or
+`env_file`; the renderer rejects mixed upstream types.
+
 If the hostname is used by a sibling repo's own Caddy drop-in or by a direct
 VPN-only service, keep the same registry entry but set `ingress = "repo-caddy"`
 or `ingress = "direct"` instead.
@@ -98,6 +116,7 @@ and verifies each private hostname resolves to the WireGuard server IP.
 | `port_env_key` | Env var name to read port from `env_file` |
 | `port_default` | Fallback port when env lookup finds nothing |
 | `env_file` | Path to env file for port lookup |
+| `unix_socket` | Absolute canonical Unix-socket backend path; mutually exclusive with all port fields |
 | `url_scheme` | Optional inventory URL scheme for non-HTTPS direct services, for example `rdp` |
 | `client_ca_path` | Override client CA; omit to use the shared wiring-harness CA |
 | `proxy_headers` | Extra headers injected by Caddy into the upstream request |
@@ -186,3 +205,14 @@ the backend deploy with:
 ```bash
 scripts/apply_site_changes.sh --skip-mtls
 ```
+
+## Tests
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
+bash tests/test_caddy_unix_podman.sh
+```
+
+The Podman test validates the generated Caddyfile and proves a real mTLS HTTPS
+request reaches a Unix-socket backend while a client without a certificate is
+rejected.
