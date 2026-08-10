@@ -8,5 +8,4 @@ jobs:
     uses: casonk/.github/.github/workflows/python-ci.yml@main
     with:
       python-versions: '["3.12"]'
-      skip-install: true
       run-pytest: true
