@@ -2,6 +2,8 @@
 
 ## Purpose
 
+For portfolio-wide repository standards and baseline conventions, consult the control-plane repo at `./util-repos/traction-control` from the portfolio root.
+
 `wiring-harness` owns the shared Caddy, mTLS, and DNS infrastructure for all
 home-server services. Services declare themselves in `services.toml`; that
 registry is also the canonical inventory for private browser/admin endpoints,
