@@ -333,6 +333,14 @@ macos_edge_listen_port = {listen_port}
         decoded = {"subjectAltName": (("DNS", "clockwork.air.internal"),)}
         with (
             mock.patch.object(edge, "_decode_certificate", return_value=decoded),
+            # Without this the interface probe reaches the real host, so the render
+            # fails on a missing utun7 wherever the tunnel is down -- including CI --
+            # long before it can reject the certificate this test is about.
+            mock.patch.object(
+                edge,
+                "_interface_ipv4_addresses",
+                return_value={ipaddress.ip_address("10.99.0.254")},
+            ),
             self.assertRaisesRegex(edge.EdgeConfigError, "IP SAN 10.99.0.254"),
         ):
             edge.render_bundle(
