@@ -16,12 +16,34 @@ Wireguard lives in `short-circuit`. SSH extensions live in `pit-box`.
 - mTLS CA and cert generation (shared server cert, per-device client certs)
 - iOS/macOS mobileconfig export for WireGuard + mTLS access
 - Combined Caddyfile generation from the service registry
+- Render-only macOS Air edge with IP-literal mTLS sites and an inert user LaunchAgent
+- Owner-only, independently rotatable Air PKI bootstrap with an exact WireGuard IP SAN
+- Owner-only Mini/Pro Apple profiles with distinct Air-CA-signed client identities
+- Read-only Air readiness and independent-peer mTLS/backend smoke checks with probe-only bounded logs
 - dnsmasq A-record config for internal hostnames
 - System-level provisioning: cert install, Caddy restart, user linger
 - Consent reference: [`../../doc-repos/my-consent/remote-access-and-private-files.md`](../../doc-repos/my-consent/remote-access-and-private-files.md) documents the explicit consent covering personal certificate, mobileconfig, device, and remote-access processing handled by this repo.
 
 Out of scope: WireGuard setup (short-circuit), SSH (pit-box), service-specific
 systemd unit management (each service repo handles its own).
+
+The temporary Air edge is documented separately in
+[`docs/macos-private-edge.md`](docs/macos-private-edge.md). It uses the same
+canonical local service registry but never activates Caddy or launchd.
+
+Bootstrap its distinct local CA, server identity, and validation client before
+rendering the edge:
+
+```bash
+python3 scripts/bootstrap_macos_air_pki.py
+python3 scripts/export_macos_air_profiles.py
+python3 scripts/render_macos_private_edge.py --validate-caddy
+```
+
+All three commands are inert with respect to profile installation, Caddy,
+launchd, WireGuard, and Keychain. See
+[`docs/macos-air-device-profiles.md`](docs/macos-air-device-profiles.md) for the
+owner-only Mini/Pro artifacts and clipboard-safe installation flow.
 
 ## Quick Start
 
@@ -121,6 +143,8 @@ and verifies each private hostname resolves to the WireGuard server IP.
 | `client_ca_path` | Override client CA; omit to use the shared wiring-harness CA |
 | `proxy_headers` | Extra headers injected by Caddy into the upstream request |
 | `dns_enabled` | Optional override; defaults to `true` for VPN DNS publication |
+| `macos_edge_role` | Optional reviewed Air role: required `clockwork` or optional `snowbridge` |
+| `macos_edge_listen_port` | Exact reviewed Air HTTPS port: Clockwork `8443`, Snowbridge `8444` |
 
 Only `ingress = "wiring-harness-caddy"` entries become blocks in the combined
 host Caddyfile. `repo-caddy` and `direct` entries still appear in the local
@@ -176,6 +200,10 @@ System certs (readable by Caddy) are installed to `/etc/caddy/certs/wiring-harne
 | `scripts/apply_site_changes.sh` | Fast one-command path after editing the private-site registry: refresh server cert SANs, install dnsmasq records, provision Caddy, and verify VPN DNS |
 | `scripts/setup-mtls.sh` | Generate CA, server cert, client cert, mobileconfig, dnsmasq snippet |
 | `scripts/setup_caddy.py --provision` | Install certs, generate Caddyfile, restart Caddy, enable linger |
+| `scripts/bootstrap_macos_air_pki.py` | Create and validate owner-only Air CA/server/local-client material without activating anything |
+| `scripts/export_macos_air_profiles.py` | Create or validate distinct owner-only Mini/Pro Apple mTLS profiles; copy an install password directly to the clipboard |
+| `scripts/render_macos_private_edge.py` | Render/validate an owner-only WireGuard-IP Caddyfile and inert user LaunchAgent |
+| `scripts/check_macos_air_live.py` | Check live local Air readiness or wait for a nonce-correlated request from one validated WireGuard peer `/32` without host self-hairpinning |
 | `scripts/render_private_site_inventory.py` | Render the merged private-site inventory as local Markdown |
 | `scripts/export_mtls_profile.py` | Issue a per-device client cert and stage mobileconfig |
 | `scripts/restage_mtls_device.py` | Rebuild and re-copy an existing device's staged profile artifacts without rotating the identity |
@@ -211,8 +239,19 @@ scripts/apply_site_changes.sh --skip-mtls
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
 bash tests/test_caddy_unix_podman.sh
+bash tests/test_macos_private_edge_podman.sh
 ```
 
 The Podman test validates the generated Caddyfile and proves a real mTLS HTTPS
 request reaches a Unix-socket backend while a client without a certificate is
 rejected.
+
+The macOS-edge Podman test creates a dummy `utun7` with the Air test `/32`,
+validates the exact generated Caddyfile with Caddy, then exercises Clockwork and
+Snowbridge on separate loopback backends and separate client CAs. It proves
+valid IP-literal requests work with omitted and explicit SNI while anonymous
+and cross-role identities are rejected in both directions. It also proves that
+ordinary requests are excluded from the owner-only access logs while live-smoke
+requests retain only an opaque non-secret correlation value and normalized
+probe path. Full URIs, request headers, TLS-client metadata, and response
+headers are omitted.

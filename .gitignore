@@ -8,6 +8,7 @@ __pycache__/
 services.local.toml
 devices.local.toml
 config/caddy/Caddyfile.combined.local
+config/macos-private-edge.local/
 config/private-sites.inventory.local.md
 CHATHISTORY.md
 CLAUDE.md
