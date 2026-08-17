@@ -11,6 +11,12 @@
 
 wg_ip = "<wireguard-server-ip>"
 
+# Optional temporary macOS edge. The /32 is mandatory: this address becomes
+# the literal Safari URL and the only Caddy listener address.
+[macos_private_edge]
+wireguard_interface = "<utun-interface>"
+wireguard_address = "<wireguard-server-ip>/32"
+
 [[services]]
 name        = "my-app"
 description = "My app UI"
@@ -19,6 +25,32 @@ hostname    = "app.home.internal"
 access_mode = "shared-mtls"
 ingress     = "wiring-harness-caddy"
 port        = 3000
+
+# Required macOS Air edge role. The reviewed backend is fixed at loopback
+# 127.0.0.1:5001. Port 8443 stays unprivileged for a user LaunchAgent.
+[[services]]
+name                   = "clockwork-web"
+description            = "Clockwork UI on the temporary Air edge"
+owner_repo             = "./util-repos/clockwork"
+hostname               = "clockwork.air.internal"
+access_mode            = "shared-mtls"
+ingress                = "wiring-harness-caddy"
+port                   = 5001
+macos_edge_role        = "clockwork"
+macos_edge_listen_port = 8443
+
+# Optional Air Snowbridge role. The only reviewed backend is
+# 127.0.0.1:8080; it receives a separate IP-literal HTTPS port.
+[[services]]
+name                   = "snowbridge-filebrowser"
+description            = "Snowbridge files on the temporary Air edge"
+owner_repo             = "./util-repos/snowbridge"
+hostname               = "files.air.internal"
+access_mode            = "shared-mtls"
+ingress                = "wiring-harness-caddy"
+port                   = 8080
+macos_edge_role        = "snowbridge"
+macos_edge_listen_port = 8444
 
 # Root-created Unix socket shared only with the Caddy service group:
 [[services]]

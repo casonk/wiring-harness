@@ -17,6 +17,10 @@ Service-specific systemd units and sudoers rules stay in each service's own repo
 - `services.toml`: private site registry — one `[[services]]` entry per private browser/admin endpoint
 - `scripts/setup-mtls.sh`: generates CA, server cert, client cert, mobileconfig, dnsmasq snippet
 - `scripts/setup_caddy.py`: reads services.toml, generates Caddyfile, provisions system
+- `scripts/bootstrap_macos_air_pki.py`: creates and validates owner-only Air PKI material
+- `scripts/export_macos_air_profiles.py`: creates owner-only Mini/Pro Apple profiles from the Air CA
+- `scripts/render_macos_private_edge.py`: renders an inert, IP-literal macOS Caddy/launchd bundle
+- `scripts/check_macos_air_live.py`: performs read-only Air readiness and independent-peer live-smoke checks
 - `scripts/render_private_site_inventory.py`: renders a local Markdown inventory from the merged registry
 - `scripts/export_mtls_profile.py`: issues per-device client certs and stages mobileconfigs
 - `config/caddy/Caddyfile.example`: reference Caddyfile showing expected structure
@@ -29,6 +33,11 @@ Service-specific systemd units and sudoers rules stay in each service's own repo
 WH_WG_IP=10.99.0.1 bash scripts/setup-mtls.sh
 sudo python3 scripts/setup_caddy.py --provision
 sudo python3 scripts/export_mtls_profile.py --device-name iphone
+
+# Render the owner-only Air edge without activating Caddy or launchd
+python3 scripts/bootstrap_macos_air_pki.py
+python3 scripts/export_macos_air_profiles.py
+python3 scripts/render_macos_private_edge.py --validate-caddy
 ```
 
 ## Operating Rules
@@ -45,6 +54,15 @@ sudo python3 scripts/export_mtls_profile.py --device-name iphone
    individual service units.  Each service repo owns its own enable/disable.
 5. Per-device mobileconfigs are staged to `/srv/snowbridge/share/tmp/` for
    easy distribution via the snowbridge SMB share.
+6. The macOS private-edge renderer is intentionally render-only. It consumes
+   owner-only local registry/certificate inputs and must never invoke
+   `launchctl`, install a plist, create a CA, or fall back to a wildcard bind.
+7. The macOS Air PKI bootstrap owns only its local certificate directory. It
+   must use direct OpenSSL argument vectors, never print private material, and
+   never import into Keychain or activate a service.
+8. Air device-profile generation preserves complete identities by default,
+   requires explicit rotation, keeps identity state separate from delivery
+   profiles, and must never print or embed a PKCS#12 passphrase.
 
 ## Sudo Boundary
 

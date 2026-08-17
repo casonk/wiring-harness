@@ -9,6 +9,9 @@
 3. After any cert or Caddy config change, run `sudo python3 scripts/setup_caddy.py --provision` to apply.
 4. Re-run `bash scripts/setup-mtls.sh` any time the WireGuard IP or service list changes.
 5. When deploying the Snowbridge File Browser fork behind the shared Caddy, run `./scripts/deploy_snowbridge_filebrowser_fork_image.sh` from this repo instead of recreating Snowbridge's standalone Caddy stack.
+6. Treat `scripts/render_macos_private_edge.py` as render-only. Backend
+   LaunchAgents remain in their owning repos, and activation must be an
+   explicit operator step after reviewing the owner-only artifacts.
 
 ## Content Standards
 
