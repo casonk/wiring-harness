@@ -76,6 +76,7 @@ class EdgeService:
     listen_port: int
     upstream_port: int
     client_ca: Path
+    static_root: Path | None = None
 
 
 REVIEWED_ROLES = {
@@ -91,6 +92,13 @@ REVIEWED_ROLES = {
         upstream_port=8080,
         default_listen_port=8444,
         health_path="/health",
+        required=False,
+    ),
+    "webterm": ReviewedRole(
+        owner_repo_name="pit-box",
+        upstream_port=7681,
+        default_listen_port=8445,
+        health_path="/",
         required=False,
     ),
 }
@@ -372,6 +380,11 @@ def _select_services(sites: list[dict], certs_dir: Path) -> list[EdgeService]:
         client_ca = (
             _canonical_absolute_path(ca_raw, description=f"{name}.client_ca_path") if ca_raw else certs_dir / "ca.crt"
         )
+        static_root = None
+        if role == "webterm":
+            static_root = Path(str(site["owner_repo"])).expanduser().resolve() / "build" / "macos-webterm"
+            if any(character.isspace() or ord(character) < 0x20 for character in str(static_root)):
+                raise EdgeConfigError(f"{name}: Webterm static root cannot contain whitespace or control characters")
         selected.append(
             EdgeService(
                 name=name,
@@ -379,6 +392,7 @@ def _select_services(sites: list[dict], certs_dir: Path) -> list[EdgeService]:
                 listen_port=listen_port,
                 upstream_port=upstream_port,
                 client_ca=client_ca,
+                static_root=static_root,
             )
         )
         seen_roles.add(role)
@@ -397,6 +411,42 @@ def generate_caddyfile(
     server_key: Path,
     logs_dir: Path,
 ) -> str:
+    def webterm_routes(service: EdgeService) -> str:
+        if service.static_root is None:
+            raise EdgeConfigError("webterm requires a static root")
+        return (
+            "\t@api path /api/*\n"
+            "\thandle @api {\n"
+            "\t\treverse_proxy 127.0.0.1:7682\n"
+            "\t}\n\n"
+            "\t@term_ttyd path /term/token /term/ws\n"
+            "\thandle @term_ttyd {\n"
+            "\t\turi strip_prefix /term\n"
+            f"\t\treverse_proxy 127.0.0.1:{service.upstream_port}\n"
+            "\t}\n\n"
+            "\t@home path /\n"
+            "\thandle @home {\n"
+            "\t\theader Cache-Control \"no-store\"\n"
+            f"\t\troot * {service.static_root}\n"
+            "\t\trewrite * /home.html\n"
+            "\t\tfile_server\n"
+            "\t}\n\n"
+            "\t@term_slash path /term/\n"
+            "\thandle @term_slash {\n"
+            "\t\tredir * /term 308\n"
+            "\t}\n\n"
+            "\t@term path /term\n"
+            "\thandle @term {\n"
+            "\t\theader Cache-Control \"no-store\"\n"
+            f"\t\troot * {service.static_root}\n"
+            "\t\trewrite * /index.html\n"
+            "\t\tfile_server\n"
+            "\t}\n\n"
+            "\thandle {\n"
+            f"\t\treverse_proxy 127.0.0.1:{service.upstream_port}\n"
+            "\t}\n"
+        )
+
     blocks: list[str] = []
     for service in services:
         access_log = _access_log_path(logs_dir, service)
@@ -405,7 +455,9 @@ def generate_caddyfile(
             f"method('GET') && path('{health_path}') && "
             f"{{query.{LIVE_SMOKE_QUERY_PARAMETER}}}.matches('^[A-Za-z0-9_-]{{16,128}}$')"
         )
-        if service.role == "snowbridge":
+        if service.role == "webterm":
+            reverse_proxy = webterm_routes(service)
+        elif service.role == "snowbridge":
             reverse_proxy = (
                 f"\treverse_proxy 127.0.0.1:{service.upstream_port} {{\n"
                 f'\t\theader_up {SNOWBRIDGE_PROXY_AUTH_HEADER} "{SNOWBRIDGE_PROXY_AUTH_USER}"\n'
@@ -459,6 +511,21 @@ def generate_caddyfile(
             "\t}\n"
             "}"
         )
+    local_webterm = next((service for service in services if service.role == "webterm"), None)
+    local_block = ""
+    if local_webterm is not None:
+        local_block = (
+            "\n\n# Air-local Webterm home page; loopback only, never LAN or WAN.\n"
+            "http://127.0.0.1:7680 {\n"
+            "\tbind 127.0.0.1\n"
+            f"{webterm_routes(local_webterm)}"
+            "\theader {\n"
+            '\t\tX-Content-Type-Options "nosniff"\n'
+            '\t\tX-Frame-Options "SAMEORIGIN"\n'
+            '\t\tReferrer-Policy "no-referrer"\n'
+            "\t}\n"
+            "}\n"
+        )
     return (
         "{\n"
         "\tadmin off\n"
@@ -472,7 +539,7 @@ def generate_caddyfile(
         "\t\tstrict_sni_host insecure_off\n"
         "\t}\n"
         "}\n\n"
-        "# Render-only macOS private edge; no wildcard listener or DNS dependency.\n\n" + "\n\n".join(blocks) + "\n"
+        "# Render-only macOS private edge; no wildcard listener or DNS dependency.\n\n" + "\n\n".join(blocks) + "\n" + local_block
     )
 
 
@@ -755,6 +822,7 @@ def render_bundle(
                 "url": f"https://{wireguard.ip}:{service.listen_port}/",
                 "upstream": f"http://127.0.0.1:{service.upstream_port}",
                 "client_ca": str(service.client_ca),
+                "static_root": str(service.static_root) if service.static_root is not None else None,
                 "access_log": {
                     "path": str(_access_log_path(logs_dir, service)),
                     "scope": "live-smoke-query-only",

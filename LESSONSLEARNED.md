@@ -120,3 +120,7 @@ Tracked durable lessons for `wiring-harness`.
   process loaded it. Bind readiness to deterministic config equality, active
   launchd arguments, and a process start time newer than the rendered policy
   before using an access record as mTLS evidence.
+- A macOS private edge may need separate loopback and mesh entrypoints for one
+  service. Keep the browser's direct-on-host Home route on loopback and expose
+  the same service to peers only through the exact WireGuard listener with
+  mandatory mTLS; never replace either boundary with a wildcard listener.

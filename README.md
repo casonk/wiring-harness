@@ -143,8 +143,8 @@ and verifies each private hostname resolves to the WireGuard server IP.
 | `client_ca_path` | Override client CA; omit to use the shared wiring-harness CA |
 | `proxy_headers` | Extra headers injected by Caddy into the upstream request |
 | `dns_enabled` | Optional override; defaults to `true` for VPN DNS publication |
-| `macos_edge_role` | Optional reviewed Air role: required `clockwork` or optional `snowbridge` |
-| `macos_edge_listen_port` | Exact reviewed Air HTTPS port: Clockwork `8443`, Snowbridge `8444` |
+| `macos_edge_role` | Optional reviewed Air role: required `clockwork`; optional `snowbridge` or `webterm` |
+| `macos_edge_listen_port` | Exact reviewed Air HTTPS port: Clockwork `8443`, Snowbridge `8444`, Webterm `8445` |
 
 Only `ingress = "wiring-harness-caddy"` entries become blocks in the combined
 host Caddyfile. `repo-caddy` and `direct` entries still appear in the local
