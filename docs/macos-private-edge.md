@@ -14,11 +14,17 @@ not depend on a private DNS server:
 |---|---|---|---|
 | Clockwork | `https://<air-wireguard-ip>:8443/` | `http://127.0.0.1:5001` | Yes |
 | Snowbridge | `https://<air-wireguard-ip>:8444/` | `http://127.0.0.1:8080` | No |
+| Webterm | `https://<air-wireguard-ip>:8445/` | `http://127.0.0.1:7681` | No |
 
 Both endpoints require and verify a client certificate before proxying a
 request. Caddy binds only the configured RFC1918 WireGuard `/32`; automatic
 HTTP redirects and the Caddy admin API are disabled. No tracked Caddy drop-ins
 are imported into this narrow Air configuration.
+
+When the optional Webterm role is enabled, the same Caddy process also serves
+an Air-local convenience page at `http://127.0.0.1:7680/`. It binds exactly to
+loopback, never to Wi-Fi, LAN, or WAN; `/` is the home page and `/term` is the
+toolbar terminal. The mesh endpoint remains the mTLS-protected `:8445` site.
 
 Caddy normally enforces equality between TLS SNI and the HTTP Host header when
 client authentication is enabled. IP-literal clients such as `curl` and iOS do
@@ -32,7 +38,7 @@ only because every site on the exact WireGuard `/32` bind uses the same
 that a client without a trusted identity is still rejected. Never reuse this
 pair in a mixed-policy or public-facing server.
 
-Ports 8443 and 8444 are deliberate. This bundle renders a user LaunchAgent,
+Ports 8443, 8444, and 8445 are deliberate. This bundle renders a user LaunchAgent,
 which must not assume it can bind privileged port 443. A future port-443 design
 needs a separately reviewed root LaunchDaemon or macOS packet-filter boundary;
 changing either reviewed registry port is rejected.
@@ -69,6 +75,18 @@ ingress                = "wiring-harness-caddy"
 port                   = 8080
 macos_edge_role        = "snowbridge"
 macos_edge_listen_port = 8444
+
+# Optional:
+[[services]]
+name                   = "pit-box-webterm"
+description            = "Web terminal on Air"
+owner_repo             = "./util-repos/pit-box"
+hostname               = "webterm.air.internal"
+access_mode            = "shared-mtls"
+ingress                = "wiring-harness-caddy"
+port                   = 7681
+macos_edge_role        = "webterm"
+macos_edge_listen_port = 8445
 ```
 
 Replace the placeholder and save the content in gitignored
