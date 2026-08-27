@@ -61,6 +61,7 @@ class MacOSPrivateEdgeTests(unittest.TestCase):
         clockwork_port: int = 5001,
         listen_port: int = 8443,
         include_snowbridge: bool = False,
+        include_webterm: bool = False,
         snowbridge_client_ca: Path | None = None,
         extra_clockwork: str = "",
     ) -> None:
@@ -80,6 +81,21 @@ port                   = 8080
 {client_ca}macos_edge_role        = "snowbridge"
 macos_edge_listen_port = 8444
 """
+        webterm = ""
+        if include_webterm:
+            webterm = """
+
+[[services]]
+name                   = "pit-box-webterm"
+description            = "Web terminal"
+owner_repo             = "./util-repos/pit-box"
+hostname               = "webterm.air.internal"
+access_mode            = "shared-mtls"
+ingress                = "wiring-harness-caddy"
+port                   = 7681
+macos_edge_role        = "webterm"
+macos_edge_listen_port = 8445
+"""
         self.local_services.write_text(f"""[macos_private_edge]
 wireguard_interface = "{wireguard_interface}"
 wireguard_address = "{wireguard_address}"
@@ -94,7 +110,7 @@ ingress                = "wiring-harness-caddy"
 port                   = {clockwork_port}
 macos_edge_role        = "clockwork"
 macos_edge_listen_port = {listen_port}
-{extra_clockwork}{snowbridge}
+{extra_clockwork}{snowbridge}{webterm}
 """)
         os.chmod(self.local_services, 0o600)
 
@@ -203,6 +219,18 @@ macos_edge_listen_port = {listen_port}
             manifest["services"][1]["proxy_auth_header_override"],
             {"header": "X-Snowbridge-Auth-User", "value": "snowbridge"},
         )
+
+    def test_optional_webterm_uses_its_reviewed_loopback_port(self) -> None:
+        self._write_registry(include_webterm=True)
+        manifest = self._render()
+        caddyfile = (self.output / "Caddyfile").read_text()
+
+        self.assertIn("https://10.99.0.254:8445", caddyfile)
+        self.assertIn("reverse_proxy 127.0.0.1:7681", caddyfile)
+        self.assertIn("rewrite * /home.html", caddyfile)
+        self.assertIn("@term_ttyd path /term/token /term/ws", caddyfile)
+        self.assertEqual([item["role"] for item in manifest["services"]], ["clockwork", "webterm"])
+        self.assertIsNone(manifest["services"][1]["proxy_auth_header_override"])
 
     def test_manifest_reports_distinct_client_trust_files_by_content(self) -> None:
         snow_ca = self.certs / "snow-ca.crt"
