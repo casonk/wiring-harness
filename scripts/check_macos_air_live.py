@@ -55,6 +55,7 @@ class ServiceProbe:
     query_parameter: str
     probe_token_field: str
     probe_path_field: str
+    static_root: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -175,6 +176,10 @@ def _parse_service(raw: object, *, manifest_dir: Path, wireguard_ip: ipaddress.I
     except edge.EdgeConfigError as exc:
         raise LiveCheckError(str(exc)) from exc
 
+    static_root = None
+    if role == "webterm":
+        static_root = _canonical_path(service.get("static_root"), description="webterm static root")
+
     access = _required_mapping(service.get("access_log"), description=f"{role} access log")
     access_log = _canonical_path(access.get("path"), description=f"{role} access log path")
     expected_log = manifest_dir / "logs" / f"{role}.access.json"
@@ -212,6 +217,7 @@ def _parse_service(raw: object, *, manifest_dir: Path, wireguard_ip: ipaddress.I
         query_parameter=edge.LIVE_SMOKE_QUERY_PARAMETER,
         probe_token_field=edge.LIVE_SMOKE_LOG_TOKEN_FIELD,
         probe_path_field=edge.LIVE_SMOKE_LOG_PATH_FIELD,
+        static_root=static_root,
     )
 
 
@@ -428,6 +434,7 @@ def _validate_exact_caddyfile(config: LiveManifest) -> None:
             listen_port=service.listen_port,
             upstream_port=service.upstream_port,
             client_ca=service.client_ca,
+            static_root=service.static_root,
         )
         for service in config.services
     ]
@@ -454,8 +461,8 @@ def _parse_lsof_listeners(output: str, *, protocol: str) -> set[tuple[str, int]]
 
 def _validate_caddy_listeners(config: LiveManifest, pid: int, runner: CommandRunner) -> None:
     lsof = _find_executable(LSOF_COMMANDS, description="Caddy listeners")
-    expected = {(str(config.wireguard.ip), urllib.parse.urlsplit(service.url).port) for service in config.services}
-    if any(port is None for _, port in expected):
+    wireguard_expected = {(str(config.wireguard.ip), urllib.parse.urlsplit(service.url).port) for service in config.services}
+    if any(port is None for _, port in wireguard_expected):
         raise LiveCheckError("manifest contains a service URL without a port")
     for protocol, selector in (("TCP", "-iTCP"), ("UDP", "-iUDP")):
         command = [str(lsof), "-nP", "-a", "-p", str(pid), selector]
@@ -464,6 +471,9 @@ def _validate_caddy_listeners(config: LiveManifest, pid: int, runner: CommandRun
         result = runner(command, 10.0)
         if result.returncode != 0:
             raise LiveCheckError(f"cannot inspect Caddy {protocol} listeners")
+        expected = set(wireguard_expected)
+        if protocol == "TCP" and any(service.role == "webterm" for service in config.services):
+            expected.add(("127.0.0.1", 7680))
         actual = _parse_lsof_listeners(result.stdout, protocol=protocol)
         if actual != expected:
             raise LiveCheckError(f"Caddy {protocol} listeners differ from the exact WireGuard endpoints")

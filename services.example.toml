@@ -39,6 +39,69 @@ port                   = 5001
 macos_edge_role        = "clockwork"
 macos_edge_listen_port = 8443
 
+# Each Webterm host becomes a selectable destination in the terminal manager.
+# `terminal_home_url` is optional when this hostname is the browser URL.
+[[services]]
+name               = "pit-box-webterm-air"
+description        = "Web terminal on Air"
+owner_repo         = "./util-repos/pit-box"
+hostname           = "webterm.air.internal"
+access_mode        = "shared-mtls"
+ingress            = "wiring-harness-caddy"
+port               = 7681
+macos_edge_role    = "webterm"
+macos_edge_listen_port = 8445
+terminal_host      = "air"
+terminal_label     = "MacBook Air"
+
+# Future examples: point to each host's own protected Webterm Home, never its
+# raw ttyd port. The registry is shared with Clockwork's service portal.
+[[services]]
+name               = "pit-box-webterm-home"
+description        = "Web terminal on the home Linux server"
+owner_repo         = "./util-repos/pit-box"
+hostname           = "webterm.home.internal"
+access_mode        = "shared-mtls"
+ingress            = "wiring-harness-caddy"
+port               = 7681
+terminal_host      = "home"
+terminal_label     = "Home server"
+
+[[services]]
+name               = "pit-box-webterm-vps"
+description        = "Web terminal on the VPS"
+owner_repo         = "./util-repos/pit-box"
+hostname           = "webterm.vps.internal"
+access_mode        = "shared-mtls"
+ingress            = "wiring-harness-caddy"
+port               = 7681
+terminal_host      = "vps"
+terminal_label     = "VPS"
+
+# Each Magneto host offers its own Transmission and download path. The
+# Magneto host selector uses these entries only as safe navigation targets.
+[[services]]
+name          = "magneto-air"
+description   = "Magneto on MacBook Air"
+owner_repo    = "./util-repos/magneto"
+hostname      = "torrents.air.internal"
+access_mode   = "shared-mtls"
+ingress       = "wiring-harness-caddy"
+port          = 5400
+torrent_host  = "air"
+torrent_label = "MacBook Air"
+
+[[services]]
+name          = "magneto-home"
+description   = "Magneto on the home Linux server"
+owner_repo    = "./util-repos/magneto"
+hostname      = "torrents.home.internal"
+access_mode   = "shared-mtls"
+ingress       = "wiring-harness-caddy"
+port          = 5400
+torrent_host  = "home"
+torrent_label = "Home server"
+
 # Optional Air Snowbridge role. The only reviewed backend is
 # 127.0.0.1:8080; it receives a separate IP-literal HTTPS port.
 [[services]]
