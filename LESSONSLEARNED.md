@@ -10,9 +10,10 @@ Tracked durable lessons for `wiring-harness`.
 
 ## Lessons
 
-- Caddy caches TLS cert files in memory on startup. `systemctl reload` or
-  `reload-or-restart` sends SIGHUP but does NOT re-read cert files from disk.
-  Always use `systemctl restart caddy` after rotating or replacing certs.
+- Portfolio-general WireGuard/VPN and TLS/Caddy lessons live in
+  `traction-control/LESSONSLEARNED.md` (agents read it first); the entries here
+  are repo-specific. The Caddy "reload does not re-read certs; restart after
+  rotation" rule was up-integrated there.
 - `systemctl` read-only queries (is-active, is-enabled, show) work for system
   units without sudo. Only writes (enable, disable, daemon-reload) need elevation.
 - iOS Safari strictly enforces TLS SANs. The server cert must include every
