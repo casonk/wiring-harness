@@ -2,15 +2,21 @@
 set namespaceSeparator none
 top to bottom direction
 skinparam componentStyle rectangle
+rectangle "bootstrap_macos_air_pki\n1 python file" as bootstrap_macos_air_pki
+rectangle "check_macos_air_live\n1 python file" as check_macos_air_live
+rectangle "export_macos_air_profiles\n1 python file" as export_macos_air_profiles
 rectangle "export_mtls_passwords_to_keepass\n1 python file" as export_mtls_passwords_to_keepass
 rectangle "export_mtls_profile\n1 python file" as export_mtls_profile
-rectangle "render_private_site_inventory\n1 python file" as render_private_site_inventory
-rectangle "check_macos_air_live\n1 python file" as check_macos_air_live
+rectangle "inspect_mtls_device\n1 python file" as inspect_mtls_device
 rectangle "render_macos_private_edge\n1 python file" as render_macos_private_edge
+rectangle "render_private_site_inventory\n1 python file" as render_private_site_inventory
+rectangle "restage_mtls_device\n1 python file" as restage_mtls_device
 rectangle "setup_caddy\n1 python file" as setup_caddy
 rectangle "site_registry\n1 python file" as site_registry
-render_private_site_inventory --> site_registry
 check_macos_air_live --> render_macos_private_edge
+export_macos_air_profiles --> bootstrap_macos_air_pki
+inspect_mtls_device --> export_mtls_profile
 render_macos_private_edge --> site_registry
+render_private_site_inventory --> site_registry
 setup_caddy --> site_registry
 @enduml

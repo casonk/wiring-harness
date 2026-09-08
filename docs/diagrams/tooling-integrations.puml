@@ -5,15 +5,26 @@ skinparam shadowing false
 skinparam defaultFontName Monospace
 skinparam componentStyle rectangle
 skinparam linetype ortho
-rectangle ".github/workflows/ci.yml\n4 detected tools" as source_github_workflows_ci_yml #E0F2FE
+rectangle ".github/workflows/ci.yml\n1 detected tool" as source_github_workflows_ci_yml #E0F2FE
+rectangle ".github/workflows/secret-scan.yml\n1 detected tool" as source_github_workflows_secret_scan_yml #E0F2FE
 rectangle "scripts/apply_site_changes.sh\n6 detected tools" as source_scripts_apply_site_changes_sh #E0F2FE
 rectangle "scripts/deploy_snowbridge_filebrowser_fork_image.sh\n13 detected tools" as source_scripts_deploy_snowbridge_filebrowser_fork_image_sh #E0F2FE
 rectangle "scripts/setup-mtls.sh\n9 detected tools" as source_scripts_setup_mtls_sh #E0F2FE
+rectangle "tests/containers/caddy-unix/Containerfile\n3 detected tools" as source_tests_containers_caddy_unix_containerfile #E0F2FE
+rectangle "tests/containers/caddy-unix/run-test.sh\n7 detected tools" as source_tests_containers_caddy_unix_run_test_sh #E0F2FE
+rectangle "tests/containers/macos-private-edge/Containerfile\n3 detected tools" as source_tests_containers_macos_private_edge_containerfile #E0F2FE
+rectangle "tests/containers/macos-private-edge/run-test.sh\n11 detected tools" as source_tests_containers_macos_private_edge_run_test_sh #E0F2FE
+rectangle "tests/test_caddy_unix_podman.sh\n1 detected tool" as source_tests_test_caddy_unix_podman_sh #E0F2FE
+rectangle "tests/test_macos_private_edge_podman.sh\n0 detected tools" as source_tests_test_macos_private_edge_podman_sh #E0F2FE
 cloud "(command_exists" as tool_command_exists #FEF3C7
-cloud "actions/checkout" as tool_actions_checkout #FEF3C7
-cloud "actions/setup-python" as tool_actions_setup_python #FEF3C7
+cloud "8443" as tool_tool_8443 #FEF3C7
+cloud "8444" as tool_tool_8444 #FEF3C7
+cloud "apt-get" as tool_apt_get #FEF3C7
 cloud "args+=(--container-tool" as tool_args_container_tool #FEF3C7
 cloud "bash" as tool_bash #FEF3C7
+cloud "caddy" as tool_caddy #FEF3C7
+cloud "casonk/.github/.github/workflows/python-ci.yml" as tool_casonk_github_github_workflows_python_ci_yml #FEF3C7
+cloud "casonk/.github/.github/workflows/secret-scan.yml" as tool_casonk_github_github_workflows_secret_scan_yml #FEF3C7
 cloud "cat" as tool_cat #FEF3C7
 cloud "chmod" as tool_chmod #FEF3C7
 cloud "cp" as tool_cp #FEF3C7
@@ -21,25 +32,25 @@ cloud "docker" as tool_docker #FEF3C7
 cloud "docker compose" as tool_docker_compose #FEF3C7
 cloud "docker-compose" as tool_docker_compose_2 #FEF3C7
 cloud "grep" as tool_grep #FEF3C7
+cloud "health" as tool_health #FEF3C7
 cloud "install" as tool_install #FEF3C7
+cloud "ip" as tool_ip #FEF3C7
 cloud "mapfile" as tool_mapfile #FEF3C7
 cloud "mkdir" as tool_mkdir #FEF3C7
 cloud "next" as tool_next #FEF3C7
 cloud "openssl" as tool_openssl #FEF3C7
-cloud "pip" as tool_pip #FEF3C7
+cloud "podman" as tool_podman #FEF3C7
 cloud "podman-compose" as tool_podman_compose #FEF3C7
-cloud "pre-commit" as tool_pre_commit #FEF3C7
 cloud "print" as tool_print #FEF3C7
 cloud "python3" as tool_python3 #FEF3C7
 cloud "readarray" as tool_readarray #FEF3C7
 cloud "rm" as tool_rm #FEF3C7
+cloud "sleep" as tool_sleep #FEF3C7
 cloud "systemctl" as tool_systemctl #FEF3C7
 cloud "tail" as tool_tail #FEF3C7
 cloud "updated" as tool_updated #FEF3C7
-source_github_workflows_ci_yml --> tool_actions_checkout
-source_github_workflows_ci_yml --> tool_actions_setup_python
-source_github_workflows_ci_yml --> tool_pip
-source_github_workflows_ci_yml --> tool_pre_commit
+source_github_workflows_ci_yml --> tool_casonk_github_github_workflows_python_ci_yml
+source_github_workflows_secret_scan_yml --> tool_casonk_github_github_workflows_secret_scan_yml
 source_scripts_apply_site_changes_sh --> tool_bash
 source_scripts_apply_site_changes_sh --> tool_cat
 source_scripts_apply_site_changes_sh --> tool_install
@@ -68,8 +79,33 @@ source_scripts_setup_mtls_sh --> tool_python3
 source_scripts_setup_mtls_sh --> tool_readarray
 source_scripts_setup_mtls_sh --> tool_rm
 source_scripts_setup_mtls_sh --> tool_systemctl
+source_tests_containers_caddy_unix_containerfile --> tool_apt_get
+source_tests_containers_caddy_unix_containerfile --> tool_docker
+source_tests_containers_caddy_unix_containerfile --> tool_rm
+source_tests_containers_caddy_unix_run_test_sh --> tool_caddy
+source_tests_containers_caddy_unix_run_test_sh --> tool_cat
+source_tests_containers_caddy_unix_run_test_sh --> tool_grep
+source_tests_containers_caddy_unix_run_test_sh --> tool_health
+source_tests_containers_caddy_unix_run_test_sh --> tool_install
+source_tests_containers_caddy_unix_run_test_sh --> tool_python3
+source_tests_containers_caddy_unix_run_test_sh --> tool_sleep
+source_tests_containers_macos_private_edge_containerfile --> tool_apt_get
+source_tests_containers_macos_private_edge_containerfile --> tool_docker
+source_tests_containers_macos_private_edge_containerfile --> tool_rm
+source_tests_containers_macos_private_edge_run_test_sh --> tool_tool_8443
+source_tests_containers_macos_private_edge_run_test_sh --> tool_tool_8444
+source_tests_containers_macos_private_edge_run_test_sh --> tool_caddy
+source_tests_containers_macos_private_edge_run_test_sh --> tool_cat
+source_tests_containers_macos_private_edge_run_test_sh --> tool_chmod
+source_tests_containers_macos_private_edge_run_test_sh --> tool_grep
+source_tests_containers_macos_private_edge_run_test_sh --> tool_install
+source_tests_containers_macos_private_edge_run_test_sh --> tool_ip
+source_tests_containers_macos_private_edge_run_test_sh --> tool_openssl
+source_tests_containers_macos_private_edge_run_test_sh --> tool_python3
+source_tests_containers_macos_private_edge_run_test_sh --> tool_sleep
+source_tests_test_caddy_unix_podman_sh --> tool_podman
 note as toolingGraphSummary
-Scanned 4 tooling entrypoints.
-Detected 27 third-party tools.
+Scanned 11 tooling entrypoints.
+Detected 33 third-party tools.
 end note
 @enduml
