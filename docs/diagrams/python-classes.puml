@@ -1,11 +1,35 @@
 @startuml classes_wiring-harness
 set namespaceSeparator none
+class "<color:red>BootstrapError</color>" as bootstrap_macos_air_pki.BootstrapError {
+}
+class "BootstrapResult" as bootstrap_macos_air_pki.BootstrapResult {
+  backup_dir : Path | None
+  certs_dir : Path
+  idempotent : bool
+}
+class "DeviceSpec" as export_macos_air_profiles.DeviceSpec {
+  common_name : str
+  display_name : str
+  profile_file : str
+  profile_identifier : str
+  slug : str
+}
 class "DeviceSpec" as export_mtls_profile.DeviceSpec {
+  delivery : str
   name : str
   notify_email : str | None
   notify_phone : str | None
   platform : str
-  type : str
+}
+class "<color:red>EdgeConfigError</color>" as render_macos_private_edge.EdgeConfigError {
+}
+class "EdgeService" as render_macos_private_edge.EdgeService {
+  client_ca : Path
+  listen_port : int
+  name : str
+  role : str
+  static_root : Path | None
+  upstream_port : int
 }
 class "ExtraP12" as export_mtls_profile.ExtraP12 {
   display_name : str
@@ -13,6 +37,11 @@ class "ExtraP12" as export_mtls_profile.ExtraP12 {
   p12_bytes : bytes
   p12_file_name : str
   passphrase : str
+}
+class "IdentityArtifact" as inspect_mtls_device.IdentityArtifact {
+  label : str
+  p12_path : Path
+  passphrase_path : Path
 }
 class "IdentityPaths" as export_mtls_profile.IdentityPaths {
   cert_path : Path
@@ -24,11 +53,65 @@ class "IdentityPaths" as export_mtls_profile.IdentityPaths {
   staged_p12_path : Path
   staged_profile_path : Path
 }
+class "<color:red>LiveCheckError</color>" as check_macos_air_live.LiveCheckError {
+}
+class "LiveManifest" as check_macos_air_live.LiveManifest {
+  caddy_binary : Path
+  caddy_config : Path
+  installed_plist : Path
+  launchd_label : str
+  path : Path
+  rendered_plist : Path
+  server_certificate : Path
+  server_private_key : Path
+  services : tuple[ServiceProbe, ...]
+  trust_topology : str
+  wireguard : IPv4Interface
+  wireguard_interface : str
+}
+class "LogCursor" as check_macos_air_live.LogCursor {
+  device : int
+  inode : int
+  offset : int
+  partial : bytes
+  path : Path
+}
 class "Ownership" as export_mtls_profile.Ownership {
   gid : int
   group_name : str
   owner_name : str
   uid : int
+}
+class "<color:red>ProfileError</color>" as export_macos_air_profiles.ProfileError {
+}
+class "ProfileResult" as export_macos_air_profiles.ProfileResult {
+  backup_dir : Path | None
+  generated_devices : tuple[str, ...]
+  idempotent : bool
+  output_root : Path
+  preserved_devices : tuple[str, ...]
+  selected_devices : tuple[str, ...]
+}
+class "ReviewedRole" as render_macos_private_edge.ReviewedRole {
+  default_listen_port : int
+  health_path : str
+  owner_repo_name : str
+  required : bool
+  upstream_port : int
+}
+class "ServiceProbe" as check_macos_air_live.ServiceProbe {
+  access_log : Path
+  client_ca : Path
+  health_path : str
+  listen_port : int
+  probe_path_field : str
+  probe_token_field : str
+  query_parameter : str
+  registry_name : str
+  role : str
+  static_root : Path | None
+  upstream_port : int
+  url : str
 }
 class "<color:red>SetupError</color>" as export_mtls_profile.SetupError {
 }
