@@ -125,3 +125,9 @@ Tracked durable lessons for `wiring-harness`.
   service. Keep the browser's direct-on-host Home route on loopback and expose
   the same service to peers only through the exact WireGuard listener with
   mandatory mTLS; never replace either boundary with a wildcard listener.
+- Do not report a private service URL from an example, an inactive temporary
+  edge, or a different host's local registry. Query the active tunnel DNS and
+  use the deployed host's merged `services.local.toml` as the source; render a
+  client-facing inventory from that one registry instead of maintaining a
+  second hand-copied URL table. DNS, Caddy routing, certificate SANs, and mTLS
+  policy must all be generated and verified together before calling a URL live.
