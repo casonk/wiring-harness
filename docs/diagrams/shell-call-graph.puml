@@ -6,16 +6,12 @@ skinparam defaultFontName Monospace
 skinparam componentStyle rectangle
 skinparam linetype ortho
 rectangle "scripts/apply_site_changes.sh\n0 local shell edges\n5 external tools" as shell_scripts_apply_site_changes_sh #DBEAFE
-rectangle "scripts/deploy_snowbridge_filebrowser_fork_image.sh\n0 local shell edges\n13 external tools" as shell_scripts_deploy_snowbridge_filebrowser_fork_image_sh #DBEAFE
+rectangle "scripts/deploy_snowbridge_filebrowser_fork_image.sh\n0 local shell edges\n11 external tools" as shell_scripts_deploy_snowbridge_filebrowser_fork_image_sh #DBEAFE
 rectangle "scripts/setup-mtls.sh\n0 local shell edges\n9 external tools" as shell_scripts_setup_mtls_sh #DBEAFE
-rectangle "tests/containers/caddy-unix/run-test.sh\n0 local shell edges\n7 external tools" as shell_tests_containers_caddy_unix_run_test_sh #DBEAFE
-rectangle "tests/containers/macos-private-edge/run-test.sh\n0 local shell edges\n11 external tools" as shell_tests_containers_macos_private_edge_run_test_sh #DBEAFE
+rectangle "tests/containers/caddy-unix/run-test.sh\n0 local shell edges\n6 external tools" as shell_tests_containers_caddy_unix_run_test_sh #DBEAFE
+rectangle "tests/containers/macos-private-edge/run-test.sh\n0 local shell edges\n9 external tools" as shell_tests_containers_macos_private_edge_run_test_sh #DBEAFE
 rectangle "tests/test_caddy_unix_podman.sh\n0 local shell edges\n1 external tool" as shell_tests_test_caddy_unix_podman_sh #DBEAFE
 rectangle "tests/test_macos_private_edge_podman.sh\n0 local shell edges\n0 external tools" as shell_tests_test_macos_private_edge_podman_sh #DBEAFE
-cloud "(command_exists" as tool_command_exists #FEF3C7
-cloud "8443" as tool_tool_8443 #FEF3C7
-cloud "8444" as tool_tool_8444 #FEF3C7
-cloud "args+=(--container-tool" as tool_args_container_tool #FEF3C7
 cloud "caddy" as tool_caddy #FEF3C7
 cloud "cat" as tool_cat #FEF3C7
 cloud "chmod" as tool_chmod #FEF3C7
@@ -24,7 +20,6 @@ cloud "docker" as tool_docker #FEF3C7
 cloud "docker compose" as tool_docker_compose #FEF3C7
 cloud "docker-compose" as tool_docker_compose_2 #FEF3C7
 cloud "grep" as tool_grep #FEF3C7
-cloud "health" as tool_health #FEF3C7
 cloud "install" as tool_install #FEF3C7
 cloud "ip" as tool_ip #FEF3C7
 cloud "mapfile" as tool_mapfile #FEF3C7
@@ -46,8 +41,6 @@ shell_scripts_apply_site_changes_sh --> tool_install
 shell_scripts_apply_site_changes_sh --> tool_mapfile
 shell_scripts_apply_site_changes_sh --> tool_python3
 shell_scripts_apply_site_changes_sh --> tool_tail
-shell_scripts_deploy_snowbridge_filebrowser_fork_image_sh --> tool_command_exists
-shell_scripts_deploy_snowbridge_filebrowser_fork_image_sh --> tool_args_container_tool
 shell_scripts_deploy_snowbridge_filebrowser_fork_image_sh --> tool_cat
 shell_scripts_deploy_snowbridge_filebrowser_fork_image_sh --> tool_docker
 shell_scripts_deploy_snowbridge_filebrowser_fork_image_sh --> tool_docker_compose
@@ -71,12 +64,9 @@ shell_scripts_setup_mtls_sh --> tool_systemctl
 shell_tests_containers_caddy_unix_run_test_sh --> tool_caddy
 shell_tests_containers_caddy_unix_run_test_sh --> tool_cat
 shell_tests_containers_caddy_unix_run_test_sh --> tool_grep
-shell_tests_containers_caddy_unix_run_test_sh --> tool_health
 shell_tests_containers_caddy_unix_run_test_sh --> tool_install
 shell_tests_containers_caddy_unix_run_test_sh --> tool_python3
 shell_tests_containers_caddy_unix_run_test_sh --> tool_sleep
-shell_tests_containers_macos_private_edge_run_test_sh --> tool_tool_8443
-shell_tests_containers_macos_private_edge_run_test_sh --> tool_tool_8444
 shell_tests_containers_macos_private_edge_run_test_sh --> tool_caddy
 shell_tests_containers_macos_private_edge_run_test_sh --> tool_cat
 shell_tests_containers_macos_private_edge_run_test_sh --> tool_chmod
@@ -90,6 +80,6 @@ shell_tests_test_caddy_unix_podman_sh --> tool_podman
 note as shellGraphSummary
 Scanned 7 shell scripts.
 Detected 0 local shell edges.
-Detected 29 external tools.
+Detected 24 external tools.
 end note
 @enduml

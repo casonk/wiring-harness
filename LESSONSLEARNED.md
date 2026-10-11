@@ -131,3 +131,13 @@ Tracked durable lessons for `wiring-harness`.
   client-facing inventory from that one registry instead of maintaining a
   second hand-copied URL table. DNS, Caddy routing, certificate SANs, and mTLS
   policy must all be generated and verified together before calling a URL live.
+- Adding a new mTLS identity (e.g. a break-glass backup credential) needs no
+  CA rotation and no server-cert refresh: add an entry to `devices.local.toml`
+  and run `export_mtls_profile.py --device-name <name> --no-notify
+  --no-snowbridge` to issue one new leaf cert from the existing CA into
+  `issued/`. `--dry-run` first is a real preflight (it prints the plan without
+  touching disk). The real (non-dry-run) run always refuses outside root —
+  "run as root so issued identity and staged files can be written safely" —
+  regardless of who owns `~/.config/wiring-harness/certs`; agents cannot sudo,
+  so this step is always a command handed back to the user, never one an
+  agent can complete itself.
