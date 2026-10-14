@@ -40,6 +40,9 @@ All notable changes to `wiring-harness` are documented here.
 
 ### Features
 
+- Shared Caddy sites can serve a directory of files with `static_root` (and
+  an optional `static_index`) instead of proxying to a backend, behind the
+  same client-certificate check as other shared sites.
 - Added a render-only macOS private edge that consumes the canonical local
   registry, binds IP-literal mTLS sites to one WireGuard `/32`, proxies only
   reviewed Clockwork/Snowbridge loopback ports, and emits an inert user

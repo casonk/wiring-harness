@@ -61,6 +61,7 @@ DROPIN_IMPORT = "import /etc/caddy/Caddyfile.d/*.caddy"
 HOSTS_MARKER_BEGIN = "# wiring-harness BEGIN"
 HOSTS_MARKER_END = "# wiring-harness END"
 SAFE_UNIX_SOCKET = re.compile(r"/[A-Za-z0-9._@+/-]+\Z")
+SAFE_INDEX_FILE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 
 
 def _run(cmd: list[str], timeout: int = 30) -> tuple[int, str]:
@@ -174,6 +175,31 @@ def _resolve_client_ca(svc: dict, system_certs_dir: Path) -> Path:
     return system_certs_dir / "ca.crt"
 
 
+def _resolve_static_root(svc: dict) -> str | None:
+    """Return a validated directory for a file-served site, or None for a proxy."""
+    root_raw = svc.get("static_root")
+    if root_raw is None:
+        return None
+    upstream_fields = {"port", "port_env_key", "port_default", "env_file", "unix_socket", "proxy_headers"}
+    if any(field in svc for field in upstream_fields):
+        raise ValueError(f"{svc['name']}: static_root cannot be combined with upstream fields")
+    if not isinstance(root_raw, str):
+        raise ValueError(f"{svc['name']}: static_root must be a string")
+    if SAFE_UNIX_SOCKET.fullmatch(root_raw) is None:
+        raise ValueError(f"{svc['name']}: static_root contains unsupported Caddy characters")
+    root_path = PurePosixPath(root_raw)
+    if ".." in root_path.parts or root_raw == "/" or str(root_path) != root_raw:
+        raise ValueError(f"{svc['name']}: static_root must be an absolute canonical path")
+    return root_raw
+
+
+def _resolve_static_index(svc: dict) -> str:
+    index = svc.get("static_index", "index.html")
+    if not isinstance(index, str) or SAFE_INDEX_FILE.fullmatch(index) is None:
+        raise ValueError(f"{svc['name']}: static_index must be a plain file name")
+    return index
+
+
 def _resolve_proxy_target(svc: dict, home: Path) -> str:
     """Return one validated TCP or Unix-socket Caddy upstream target."""
     socket_raw = svc.get("unix_socket")
@@ -206,13 +232,24 @@ def _site_block(
     cert: str,
     key: str,
     client_ca: str,
-    proxy_target: str,
+    proxy_target: str | None,
     proxy_headers: dict[str, str],
+    static_root: str | None = None,
+    static_index: str = "index.html",
 ) -> str:
     header_lines = "\n".join(
         f"\t\theader_up {k} {v}" for k, v in proxy_headers.items()
     )
     proxy_extra = f" {{\n{header_lines}\n\t}}" if header_lines else ""
+    if static_root is not None:
+        handler = (
+            f"\troot * {static_root}\n"
+            f"\tfile_server browse {{\n"
+            f"\t\tindex {static_index}\n"
+            f"\t}}\n"
+        )
+    else:
+        handler = f"\treverse_proxy {proxy_target}{proxy_extra}\n"
     return (
         f"https://{hostname} {{\n"
         f"\ttls {cert} {key} {{\n"
@@ -223,8 +260,8 @@ def _site_block(
         f"\t}}\n"
         f"\n"
         f"\tencode zstd gzip\n"
-        f"\treverse_proxy {proxy_target}{proxy_extra}\n"
-        f"\n"
+        + handler
+        + "\n"
         f"\theader {{\n"
         f'\t\tX-Content-Type-Options "nosniff"\n'
         f'\t\tX-Frame-Options "SAMEORIGIN"\n'
@@ -241,12 +278,22 @@ def generate_caddyfile(services: list[dict], system_certs_dir: Path, home: Path)
     blocks: list[str] = []
     for svc in services:
         hostname = svc["hostname"]
-        proxy_target = _resolve_proxy_target(svc, home)
+        static_root = _resolve_static_root(svc)
+        proxy_target = None if static_root else _resolve_proxy_target(svc, home)
         client_ca = str(_resolve_client_ca(svc, system_certs_dir))
         proxy_headers = dict(svc.get("proxy_headers") or {})
         blocks.append(
             f"# {svc['name']} — {hostname}\n"
-            + _site_block(hostname, cert, key, client_ca, proxy_target, proxy_headers)
+            + _site_block(
+                hostname,
+                cert,
+                key,
+                client_ca,
+                proxy_target,
+                proxy_headers,
+                static_root=static_root,
+                static_index=_resolve_static_index(svc) if static_root else "index.html",
+            )
         )
 
     return (
@@ -374,7 +421,8 @@ def provision(*, sites: list[dict], services_path: Path, user_certs_dir: Path, i
 
     print()
     for svc in services:
-        print(f"  https://{svc['hostname']}  → {_resolve_proxy_target(svc, home)}")
+        target = _resolve_static_root(svc) or _resolve_proxy_target(svc, home)
+        print(f"  https://{svc['hostname']}  → {target}")
     return 0
 
 
