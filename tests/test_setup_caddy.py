@@ -75,5 +75,46 @@ class CaddyUpstreamTests(unittest.TestCase):
         self.assertEqual(target, "127.0.0.1:8788")
 
 
+class CaddyStaticRootTests(unittest.TestCase):
+    def test_static_root_renders_file_server_with_index(self) -> None:
+        content = setup_caddy.generate_caddyfile(
+            [
+                {
+                    "name": "bench",
+                    "hostname": "bench.home.internal",
+                    "static_root": "/srv/bench/results",
+                    "static_index": "latest.html",
+                }
+            ],
+            Path("/etc/caddy/certs/wiring-harness"),
+            Path("/home/operator"),
+        )
+
+        self.assertIn("root * /srv/bench/results", content)
+        self.assertIn("file_server browse {\n\t\tindex latest.html\n\t}", content)
+        self.assertIn("mode require_and_verify", content)
+        self.assertNotIn("reverse_proxy", content)
+
+    def test_static_root_rejects_upstream_fields(self) -> None:
+        for field, value in (("port", 8080), ("unix_socket", "/run/x.sock"), ("proxy_headers", {"X": "y"})):
+            with self.subTest(field=field):
+                with self.assertRaisesRegex(ValueError, "cannot be combined with upstream fields"):
+                    setup_caddy._resolve_static_root(
+                        {"name": "mixed", "static_root": "/srv/site", field: value}
+                    )
+
+    def test_static_root_must_be_canonical_and_injection_safe(self) -> None:
+        for root in ("srv/site", "/srv/../etc", "/srv//site", "/srv/site/", "/srv/{env.X}", "/srv/site\nimport x", "/"):
+            with self.subTest(root=root):
+                with self.assertRaises(ValueError):
+                    setup_caddy._resolve_static_root({"name": "unsafe", "static_root": root})
+
+    def test_static_index_must_be_a_plain_file_name(self) -> None:
+        for index in ("../secret", "a/b.html", "x.html\nbrowse", ".hidden"):
+            with self.subTest(index=index):
+                with self.assertRaises(ValueError):
+                    setup_caddy._resolve_static_index({"name": "bad", "static_index": index})
+
+
 if __name__ == "__main__":
     unittest.main()

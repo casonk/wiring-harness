@@ -110,6 +110,26 @@ The backend must make its socket and parent directory accessible to the
 `caddy` group. Do not also set `port`, `port_env_key`, `port_default`, or
 `env_file`; the renderer rejects mixed upstream types.
 
+For a directory of generated pages, such as benchmark reports, serve the files
+directly instead of running a backend:
+
+```toml
+[[services]]
+name         = "bench-reports"
+description  = "Benchmark reports"
+owner_repo   = "./util-repos/my-bench"
+hostname     = "bench.home.internal"
+access_mode  = "shared-mtls"
+ingress      = "wiring-harness-caddy"
+static_root  = "/srv/my-bench/results"
+static_index = "latest.html"
+```
+
+Caddy serves the directory with a file listing behind the same client-cert
+check as every other shared site. `static_root` cannot be combined with port,
+socket, or `proxy_headers` fields. The `caddy` user must be able to read the
+directory; on SELinux hosts it also needs the `httpd_sys_content_t` label.
+
 If the hostname is used by a sibling repo's own Caddy drop-in or by a direct
 VPN-only service, keep the same registry entry but set `ingress = "repo-caddy"`
 or `ingress = "direct"` instead.
@@ -139,6 +159,8 @@ and verifies each private hostname resolves to the WireGuard server IP.
 | `port_default` | Fallback port when env lookup finds nothing |
 | `env_file` | Path to env file for port lookup |
 | `unix_socket` | Absolute canonical Unix-socket backend path; mutually exclusive with all port fields |
+| `static_root` | Absolute canonical directory Caddy serves as files; mutually exclusive with port, socket, and header fields |
+| `static_index` | Index file for `static_root` directories; defaults to `index.html` |
 | `url_scheme` | Optional inventory URL scheme for non-HTTPS direct services, for example `rdp` |
 | `client_ca_path` | Override client CA; omit to use the shared wiring-harness CA |
 | `proxy_headers` | Extra headers injected by Caddy into the upstream request |
