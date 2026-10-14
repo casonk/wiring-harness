@@ -125,6 +125,17 @@ access_mode = "shared-mtls"
 ingress     = "wiring-harness-caddy"
 unix_socket = "/run/nordility/web.sock"
 
+# Directory of generated pages served as files, with no backend process:
+[[services]]
+name         = "bench-reports"
+description  = "Benchmark reports"
+owner_repo   = "./util-repos/my-bench"
+hostname     = "bench.home.internal"
+access_mode  = "shared-mtls"
+ingress      = "wiring-harness-caddy"
+static_root  = "/srv/my-bench/results"
+static_index = "latest.html"
+
 # Service whose port is read from an env file:
 [[services]]
 name         = "my-service"
