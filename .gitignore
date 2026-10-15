@@ -14,3 +14,6 @@ CHATHISTORY.md
 CLAUDE.md
 
 /REFS-LOCAL.md
+
+# Local config backups
+*.bak-*
