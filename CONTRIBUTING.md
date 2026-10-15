@@ -25,3 +25,13 @@
 - Keep each pull request focused on one provisioning concern.
 - Note whether certs need to be regenerated and re-installed after the change.
 - Confirm no secrets or local-only files are included.
+
+## AI Contribution Disclosure
+
+Parts of this repository's code, documentation and commit history were drafted
+with AI coding assistants, including Claude Code, OpenAI Codex, GitHub Copilot
+and Continue. The maintainer directs that work, reviews and tests each change
+before it merges, and is responsible for the result.
+
+This section is the repository-wide disclosure. Individual commits, pull
+requests and files do not carry per-tool attribution lines.
