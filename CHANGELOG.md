@@ -4,6 +4,9 @@ All notable changes to `wiring-harness` are documented here.
 
 ## Unreleased
 
+- Add the `Private :: Do Not Upload` classifier so PyPI rejects an upload of this
+  distribution; the repository is not published as a package.
+
 ### Security
 
 - Added an owner-only Air Apple-profile exporter for Mini and Pro with distinct

@@ -6,6 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "wiring-harness"
 version = "0.1.0"
 description = "Shared Caddy, mTLS, and DNS provisioning for the home server portfolio."
+classifiers = ["Private :: Do Not Upload"]
 license = { text = "MIT" }
 requires-python = ">=3.11"
 
