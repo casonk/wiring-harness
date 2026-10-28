@@ -1,4 +1,4 @@
-@startuml classes_wiring-harness
+@startuml classes_checkout
 set namespaceSeparator none
 class "<color:red>BootstrapError</color>" as bootstrap_macos_air_pki.BootstrapError {
 }

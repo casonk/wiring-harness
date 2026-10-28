@@ -1,13 +1,13 @@
 @startuml
-title wiring-harness Shell Script Flow
+title checkout Shell Script Flow
 left to right direction
 skinparam shadowing false
 skinparam defaultFontName Monospace
 skinparam componentStyle rectangle
 skinparam linetype ortho
-rectangle "scripts/apply_site_changes.sh\n0 local shell edges\n5 external tools" as shell_scripts_apply_site_changes_sh #DBEAFE
+rectangle "scripts/apply_site_changes.sh\n0 local shell edges\n4 external tools" as shell_scripts_apply_site_changes_sh #DBEAFE
 rectangle "scripts/deploy_snowbridge_filebrowser_fork_image.sh\n0 local shell edges\n11 external tools" as shell_scripts_deploy_snowbridge_filebrowser_fork_image_sh #DBEAFE
-rectangle "scripts/setup-mtls.sh\n0 local shell edges\n9 external tools" as shell_scripts_setup_mtls_sh #DBEAFE
+rectangle "scripts/setup-mtls.sh\n0 local shell edges\n10 external tools" as shell_scripts_setup_mtls_sh #DBEAFE
 rectangle "tests/containers/caddy-unix/run-test.sh\n0 local shell edges\n6 external tools" as shell_tests_containers_caddy_unix_run_test_sh #DBEAFE
 rectangle "tests/containers/macos-private-edge/run-test.sh\n0 local shell edges\n9 external tools" as shell_tests_containers_macos_private_edge_run_test_sh #DBEAFE
 rectangle "tests/test_caddy_unix_podman.sh\n0 local shell edges\n1 external tool" as shell_tests_test_caddy_unix_podman_sh #DBEAFE
@@ -34,13 +34,12 @@ cloud "readarray" as tool_readarray #FEF3C7
 cloud "rm" as tool_rm #FEF3C7
 cloud "sleep" as tool_sleep #FEF3C7
 cloud "systemctl" as tool_systemctl #FEF3C7
-cloud "tail" as tool_tail #FEF3C7
+cloud "tee" as tool_tee #FEF3C7
 cloud "updated" as tool_updated #FEF3C7
 shell_scripts_apply_site_changes_sh --> tool_cat
 shell_scripts_apply_site_changes_sh --> tool_install
 shell_scripts_apply_site_changes_sh --> tool_mapfile
 shell_scripts_apply_site_changes_sh --> tool_python3
-shell_scripts_apply_site_changes_sh --> tool_tail
 shell_scripts_deploy_snowbridge_filebrowser_fork_image_sh --> tool_cat
 shell_scripts_deploy_snowbridge_filebrowser_fork_image_sh --> tool_docker
 shell_scripts_deploy_snowbridge_filebrowser_fork_image_sh --> tool_docker_compose
@@ -61,6 +60,7 @@ shell_scripts_setup_mtls_sh --> tool_python3
 shell_scripts_setup_mtls_sh --> tool_readarray
 shell_scripts_setup_mtls_sh --> tool_rm
 shell_scripts_setup_mtls_sh --> tool_systemctl
+shell_scripts_setup_mtls_sh --> tool_tee
 shell_tests_containers_caddy_unix_run_test_sh --> tool_caddy
 shell_tests_containers_caddy_unix_run_test_sh --> tool_cat
 shell_tests_containers_caddy_unix_run_test_sh --> tool_grep
