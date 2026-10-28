@@ -13,7 +13,13 @@
 
 - https://caddyserver.com/docs/ — Caddyfile reference (site blocks, tls directive, client_auth, reverse_proxy)
 - https://developer.apple.com/documentation/devicemanagement — Apple Configuration Profile / mobileconfig format used by export_mtls_profile.py
-- NSS Tools (certutil, pk12util) — Mozilla NSS; used to install CA trust and client identities into Firefox and Chromium NSS databases on Linux
+- https://docs.openssl.org/3.0/man1/openssl/ — OpenSSL CLI reference used for CA,
+  certificate, PKCS#12, and mobileconfig signing workflows
+- https://firefox-source-docs.mozilla.org/security/nss/ —
+  NSS `certutil` and `pk12util` tools used to install CA trust and client
+  identities into Firefox and Chromium databases on Linux
+- https://thekelleys.org.uk/dnsmasq/doc.html — dnsmasq configuration reference
+  used by generated private DNS snippets
 
 ## Notes
 
