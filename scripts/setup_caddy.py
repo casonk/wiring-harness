@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import json
 import os
 import pwd
 import re
@@ -57,6 +58,18 @@ DEFAULT_SYSTEM_CERTS_DIR = Path("/etc/caddy/certs/wiring-harness")
 # and its navigation file, written by Clockwork. Override with WH_CHROME_ROOT.
 DEFAULT_CHROME_ROOT = Path(os.environ.get("WH_CHROME_ROOT", "/srv/portfolio-chrome"))
 CHROME_PREFIX = "/_portfolio"
+# A repository that keeps its own Caddy drop-in (ingress = "repo-caddy") serves the same shared
+# directory with one line in its site block: `import portfolio_chrome /srv/portfolio-chrome`.
+CHROME_SNIPPET = (
+    "(portfolio_chrome) {\n"
+    f"\thandle_path {CHROME_PREFIX}/* {{\n"
+    "\t\troot * {args[0]}\n"
+    "\t\theader Cache-Control no-cache\n"
+    "\t\tfile_server\n"
+    "\t}\n"
+    "}"
+)
+TRACTION_CONTROL_SITES = REPO_ROOT.parent / "traction-control" / "scripts" / "portfolio_sites.py"
 DEFAULT_OUTPUT = REPO_ROOT / "config" / "caddy" / "Caddyfile.combined.local"
 DEFAULT_INVENTORY_OUTPUT = REPO_ROOT / "config" / "private-sites.inventory.local.md"
 SYSTEM_CADDYFILE = Path("/etc/caddy/Caddyfile")
@@ -341,6 +354,9 @@ def generate_caddyfile(
         "\temail admin@example.com\n"
         "}\n"
         "\n"
+        "# Snippet for repo-owned drop-ins: import portfolio_chrome <directory>\n"
+        f"{CHROME_SNIPPET}\n"
+        "\n"
         "# Preserve repo-owned Caddy drop-ins for services that manage their own host blocks.\n"
         f"{DROPIN_IMPORT}\n"
         "\n"
@@ -371,6 +387,49 @@ def _ensure_chrome_dir(path: Path, uid: int | None, gid: int | None) -> None:
     if rc_r not in (0, 127):
         _run(["chcon", "-R", "-t", "httpd_sys_content_t", str(path)])
     print(f"  chrome directory: {path} (semanage {'ok' if rc == 0 else 'skipped'})")
+
+
+def fallback_nav(sites: list[dict]) -> dict:
+    """A registry-only navigation for machines without Clockwork: just the Services menu."""
+    menu = [
+        {
+            "label": str(site.get("description") or site["name"]),
+            "icon": str(site.get("icon") or "🔗"),
+            "url": f"https://{site['hostname']}/",
+            "service": True,
+        }
+        for site in sites
+        if site.get("hostname") and site.get("access_mode") == "shared-mtls"
+    ]
+    return {
+        "version": 1,
+        "items": [{"label": "Services", "icon": "🧰", "align": "right", "menu": menu}] if menu else [],
+    }
+
+
+def _publish_chrome_files(path: Path, sites: list[dict], uid: int | None, gid: int | None) -> None:
+    """Fill the chrome directory without Clockwork: theme files from traction-control (run as the
+    invoking user, so the files stay theirs to replace) and a registry-only navigation if none
+    exists yet. Clockwork overwrites both when it runs."""
+    if TRACTION_CONTROL_SITES.is_file() and uid is not None:
+        result = subprocess.run(
+            [sys.executable, str(TRACTION_CONTROL_SITES), "publish", "--apply", "--no-store", "--dir", str(path)],
+            capture_output=True,
+            text=True,
+            user=uid,
+            group=gid,
+        )
+        state = "ok" if result.returncode == 0 else f"skipped ({result.stderr.strip()[:80]})"
+        print(f"  theme files from traction-control: {state}")
+    else:
+        print("  theme files: traction-control not found next to this repository; Clockwork publishes them")
+    nav = path / "nav.json"
+    if not nav.exists():
+        nav.write_text(json.dumps(fallback_nav(sites), indent=2) + "\n", encoding="utf-8")
+        os.chmod(nav, 0o644)
+        if uid is not None:
+            os.chown(nav, uid, gid if gid is not None else -1)
+        print("  wrote a registry-only nav.json (Clockwork replaces it)")
 
 
 def provision(*, sites: list[dict], services_path: Path, user_certs_dir: Path, inventory_output: Path) -> int:
@@ -433,6 +492,7 @@ def provision(*, sites: list[dict], services_path: Path, user_certs_dir: Path, i
 
     # ── 4b. Shared directory served at /_portfolio/ on every proxied site ─────────
     _ensure_chrome_dir(DEFAULT_CHROME_ROOT, _invoking_uid(), caddy_gid)
+    _publish_chrome_files(DEFAULT_CHROME_ROOT, sites, _invoking_uid(), caddy_gid)
 
     # ── 5. Update /etc/hosts managed block ───────────────────────────────────
     hostnames = [site["hostname"] for site in dns_sites(sites)]

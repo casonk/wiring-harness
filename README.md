@@ -155,6 +155,15 @@ It holds the portfolio top bar script (`chrome.js`) and its navigation file
 the invoking user, readable by Caddy, labelled `httpd_sys_content_t`). Static-root sites
 do not get the route.
 
+### Serving the theme with each ingress
+
+`/_portfolio/*` is answered by whoever fronts the site (see traction-control's `docs/portfolio-sites.md`):
+`wiring-harness-caddy` sites get the route automatically; a `repo-caddy` repository adds one line to
+its own site block, `import portfolio_chrome /srv/portfolio-chrome` (the generated Caddyfile defines the
+snippet); a `direct` site serves the files from its own application. Provisioning fills the directory
+without Clockwork: it publishes the theme files with traction-control (when it sits next to this
+repository) and writes a registry-only `nav.json` that Clockwork replaces when it runs.
+
 ## Service Registry (`services.toml`)
 
 | Field | Description |
