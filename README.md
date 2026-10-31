@@ -144,6 +144,17 @@ That refreshes the shared server cert SANs without rotating the CA, installs
 the generated dnsmasq records, provisions Caddy, writes the local inventory,
 and verifies each private hostname resolves to the WireGuard server IP.
 
+## Shared top bar (`/_portfolio/`)
+
+Every proxied site also serves `/_portfolio/*` from one shared directory
+(`/srv/portfolio-chrome`, override with `WH_CHROME_ROOT`), ahead of the reverse proxy.
+It holds the portfolio top bar script (`chrome.js`) and its navigation file
+(`nav.json`), which Clockwork writes from this registry. A service shows the bar with
+`<script src="/_portfolio/chrome.js" defer></script>`; see traction-control's
+`docs/system-theme.md`. `setup_caddy.py --provision` creates the directory (writable by
+the invoking user, readable by Caddy, labelled `httpd_sys_content_t`). Static-root sites
+do not get the route.
+
 ## Service Registry (`services.toml`)
 
 | Field | Description |
