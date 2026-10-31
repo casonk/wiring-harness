@@ -4,6 +4,10 @@ All notable changes to `wiring-harness` are documented here.
 
 ## Unreleased
 
+- Define a `(portfolio_chrome)` Caddy snippet so a `repo-caddy` repository serves `/_portfolio/*` with one
+  `import` line, and have provisioning fill the shared chrome directory without Clockwork: theme files via
+  traction-control's `portfolio_sites.py publish` and a registry-only `nav.json`.
+
 - Serve `/_portfolio/*` from a shared directory on every proxied site (default
   `/srv/portfolio-chrome`, `WH_CHROME_ROOT` to override) so services can load the portfolio
   top bar with one script tag; provisioning creates and labels the directory.

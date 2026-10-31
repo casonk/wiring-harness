@@ -90,12 +90,12 @@ class CaddyStaticRootTests(unittest.TestCase):
         plain = setup_caddy.generate_caddyfile(
             [site], Path("/etc/caddy/certs/wiring-harness"), Path("/home/operator"), None
         )
-        self.assertNotIn("_portfolio", plain)
+        self.assertEqual(plain.count("/_portfolio"), 1)  # only the snippet definition
         static = {"name": "b", "hostname": "b.home.internal", "static_root": "/srv/b"}
         content = setup_caddy.generate_caddyfile(
             [static], Path("/etc/caddy/certs/wiring-harness"), Path("/home/operator"), "/srv/chrome"
         )
-        self.assertNotIn("_portfolio", content)
+        self.assertEqual(content.count("/_portfolio"), 1)  # only the snippet definition
 
     def test_chrome_root_must_be_canonical_and_injection_safe(self) -> None:
         for bad in ("relative/dir", "/srv/../etc", "/srv/a b", "/srv/x}\nimport", "/", "/srv//x"):
@@ -106,6 +106,28 @@ class CaddyStaticRootTests(unittest.TestCase):
                     Path("/h"),
                     bad,
                 )
+
+    def test_the_generated_caddyfile_defines_the_snippet_before_the_drop_in_import(self) -> None:
+        content = setup_caddy.generate_caddyfile(
+            [{"name": "a", "hostname": "a.home.internal", "port": 1}],
+            Path("/c"),
+            Path("/h"),
+        )
+        self.assertIn("(portfolio_chrome) {\n\thandle_path /_portfolio/* {\n\t\troot * {args[0]}", content)
+        self.assertLess(content.index("(portfolio_chrome)"), content.index("import /etc/caddy/Caddyfile.d/"))
+
+    def test_fallback_nav_lists_mtls_services_from_the_registry_only(self) -> None:
+        nav = setup_caddy.fallback_nav(
+            [
+                {"name": "a", "description": "App A", "hostname": "a.example.internal", "access_mode": "shared-mtls", "icon": "🅰"},
+                {"name": "b", "hostname": "b.example.internal", "access_mode": "vpn-only-direct"},
+                {"name": "c", "access_mode": "shared-mtls"},
+            ]
+        )
+        (services,) = nav["items"]
+        self.assertEqual([m["url"] for m in services["menu"]], ["https://a.example.internal/"])
+        self.assertTrue(services["menu"][0]["service"])
+        self.assertEqual(setup_caddy.fallback_nav([]), {"version": 1, "items": []})
 
     def test_static_root_renders_file_server_with_index(self) -> None:
         content = setup_caddy.generate_caddyfile(
