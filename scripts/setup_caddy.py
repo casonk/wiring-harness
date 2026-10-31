@@ -53,6 +53,10 @@ REPO_ROOT = SCRIPT_DIR.parent
 DEFAULT_SERVICES_TOML = REPO_ROOT / "services.toml"
 DEFAULT_USER_CERTS_DIR = Path.home() / ".config" / "wiring-harness" / "certs"
 DEFAULT_SYSTEM_CERTS_DIR = Path("/etc/caddy/certs/wiring-harness")
+# Shared directory every proxied site serves at /_portfolio/: the portfolio top bar script
+# and its navigation file, written by Clockwork. Override with WH_CHROME_ROOT.
+DEFAULT_CHROME_ROOT = Path(os.environ.get("WH_CHROME_ROOT", "/srv/portfolio-chrome"))
+CHROME_PREFIX = "/_portfolio"
 DEFAULT_OUTPUT = REPO_ROOT / "config" / "caddy" / "Caddyfile.combined.local"
 DEFAULT_INVENTORY_OUTPUT = REPO_ROOT / "config" / "private-sites.inventory.local.md"
 SYSTEM_CADDYFILE = Path("/etc/caddy/Caddyfile")
@@ -236,6 +240,7 @@ def _site_block(
     proxy_headers: dict[str, str],
     static_root: str | None = None,
     static_index: str = "index.html",
+    chrome_root: str | None = None,
 ) -> str:
     header_lines = "\n".join(
         f"\t\theader_up {k} {v}" for k, v in proxy_headers.items()
@@ -246,6 +251,17 @@ def _site_block(
             f"\troot * {static_root}\n"
             f"\tfile_server browse {{\n"
             f"\t\tindex {static_index}\n"
+            f"\t}}\n"
+        )
+    elif chrome_root is not None:
+        handler = (
+            f"\thandle_path {CHROME_PREFIX}/* {{\n"
+            f"\t\troot * {chrome_root}\n"
+            f"\t\theader Cache-Control no-cache\n"
+            f"\t\tfile_server\n"
+            f"\t}}\n"
+            f"\thandle {{\n"
+            f"\t\treverse_proxy {proxy_target}{proxy_extra}\n"
             f"\t}}\n"
         )
     else:
@@ -271,7 +287,30 @@ def _site_block(
     )
 
 
-def generate_caddyfile(services: list[dict], system_certs_dir: Path, home: Path) -> str:
+def _resolve_chrome_root(chrome_root: Path | str | None) -> str | None:
+    """A canonical absolute directory safe to write into a Caddyfile, or None to disable."""
+    if chrome_root is None:
+        return None
+    raw = str(chrome_root)
+    path = PurePosixPath(raw)
+    if (
+        not path.is_absolute()
+        or ".." in path.parts
+        or str(path) != raw
+        or raw == "/"
+        or SAFE_UNIX_SOCKET.fullmatch(raw) is None
+    ):
+        raise ValueError(f"chrome root must be an absolute canonical path: {raw!r}")
+    return raw
+
+
+def generate_caddyfile(
+    services: list[dict],
+    system_certs_dir: Path,
+    home: Path,
+    chrome_root: Path | str | None = DEFAULT_CHROME_ROOT,
+) -> str:
+    chrome = _resolve_chrome_root(chrome_root)
     cert = str(system_certs_dir / "server.crt")
     key = str(system_certs_dir / "server.key")
 
@@ -293,6 +332,7 @@ def generate_caddyfile(services: list[dict], system_certs_dir: Path, home: Path)
                 proxy_headers,
                 static_root=static_root,
                 static_index=_resolve_static_index(svc) if static_root else "index.html",
+                chrome_root=chrome,
             )
         )
 
@@ -319,6 +359,18 @@ def _write_inventory_report(sites: list[dict], services_path: Path, output_path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(render_inventory_markdown(sites, services_path))
     print(f"  wrote inventory report: {output_path}")
+
+
+def _ensure_chrome_dir(path: Path, uid: int | None, gid: int | None) -> None:
+    """Create the shared chrome directory: writable by the invoking user, readable by Caddy."""
+    path.mkdir(parents=True, exist_ok=True)
+    os.chown(path, uid if uid is not None else 0, gid if gid is not None else 0)
+    os.chmod(path, 0o2775)
+    rc, _ = _run(["semanage", "fcontext", "-a", "-t", "httpd_sys_content_t", f"{path}(/.*)?"])
+    rc_r, out_r = _run(["restorecon", "-R", str(path)])
+    if rc_r not in (0, 127):
+        _run(["chcon", "-R", "-t", "httpd_sys_content_t", str(path)])
+    print(f"  chrome directory: {path} (semanage {'ok' if rc == 0 else 'skipped'})")
 
 
 def provision(*, sites: list[dict], services_path: Path, user_certs_dir: Path, inventory_output: Path) -> int:
@@ -378,6 +430,9 @@ def provision(*, sites: list[dict], services_path: Path, user_certs_dir: Path, i
         print("  restorecon: ok")
     elif rc_se != 127:
         print(f"warning: restorecon failed: {out_se}", file=sys.stderr)
+
+    # ── 4b. Shared directory served at /_portfolio/ on every proxied site ─────────
+    _ensure_chrome_dir(DEFAULT_CHROME_ROOT, _invoking_uid(), caddy_gid)
 
     # ── 5. Update /etc/hosts managed block ───────────────────────────────────
     hostnames = [site["hostname"] for site in dns_sites(sites)]

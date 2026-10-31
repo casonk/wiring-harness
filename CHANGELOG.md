@@ -4,6 +4,10 @@ All notable changes to `wiring-harness` are documented here.
 
 ## Unreleased
 
+- Serve `/_portfolio/*` from a shared directory on every proxied site (default
+  `/srv/portfolio-chrome`, `WH_CHROME_ROOT` to override) so services can load the portfolio
+  top bar with one script tag; provisioning creates and labels the directory.
+
 - Add the `Private :: Do Not Upload` classifier so PyPI rejects an upload of this
   distribution; the repository is not published as a package.
 

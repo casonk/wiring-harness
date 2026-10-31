@@ -76,6 +76,37 @@ class CaddyUpstreamTests(unittest.TestCase):
 
 
 class CaddyStaticRootTests(unittest.TestCase):
+    def test_proxied_sites_serve_the_shared_chrome_directory(self) -> None:
+        site = {"name": "app", "hostname": "app.home.internal", "port": 8080}
+        content = setup_caddy.generate_caddyfile(
+            [site], Path("/etc/caddy/certs/wiring-harness"), Path("/home/operator"), "/srv/chrome"
+        )
+
+        self.assertIn("handle_path /_portfolio/* {\n\t\troot * /srv/chrome", content)
+        self.assertIn("\thandle {\n\t\treverse_proxy 127.0.0.1:8080\n\t}", content)
+
+    def test_chrome_route_can_be_disabled_and_is_not_added_to_static_sites(self) -> None:
+        site = {"name": "app", "hostname": "app.home.internal", "port": 8080}
+        plain = setup_caddy.generate_caddyfile(
+            [site], Path("/etc/caddy/certs/wiring-harness"), Path("/home/operator"), None
+        )
+        self.assertNotIn("_portfolio", plain)
+        static = {"name": "b", "hostname": "b.home.internal", "static_root": "/srv/b"}
+        content = setup_caddy.generate_caddyfile(
+            [static], Path("/etc/caddy/certs/wiring-harness"), Path("/home/operator"), "/srv/chrome"
+        )
+        self.assertNotIn("_portfolio", content)
+
+    def test_chrome_root_must_be_canonical_and_injection_safe(self) -> None:
+        for bad in ("relative/dir", "/srv/../etc", "/srv/a b", "/srv/x}\nimport", "/", "/srv//x"):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                setup_caddy.generate_caddyfile(
+                    [{"name": "a", "hostname": "a.home.internal", "port": 1}],
+                    Path("/c"),
+                    Path("/h"),
+                    bad,
+                )
+
     def test_static_root_renders_file_server_with_index(self) -> None:
         content = setup_caddy.generate_caddyfile(
             [
