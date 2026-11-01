@@ -30,7 +30,7 @@ class CaddyUpstreamTests(unittest.TestCase):
         )
 
         self.assertIn("reverse_proxy unix//run/nordility/web.sock", content)
-        self.assertNotIn("127.0.0.1", content)
+        self.assertNotIn("reverse_proxy 127.0.0.1:8080", content)  # the writer route is the only 127.0.0.1
 
     def test_unix_socket_and_port_fields_are_mutually_exclusive(self) -> None:
         with self.assertRaisesRegex(ValueError, "cannot be combined with port fields"):
@@ -85,17 +85,26 @@ class CaddyStaticRootTests(unittest.TestCase):
         self.assertIn("handle_path /_portfolio/* {\n\t\troot * /srv/chrome", content)
         self.assertIn("\thandle {\n\t\treverse_proxy 127.0.0.1:8080\n\t}", content)
 
+    def test_the_global_theme_write_is_routed_to_the_local_writer_before_the_static_files(self) -> None:
+        site = {"name": "app", "hostname": "app.home.internal", "port": 8080}
+        content = setup_caddy.generate_caddyfile(
+            [site], Path("/etc/caddy/certs/wiring-harness"), Path("/home/operator"), "/srv/chrome"
+        )
+        route = "handle /_portfolio/global {\n\t\treverse_proxy 127.0.0.1:8767"
+        self.assertIn(route, content)
+        self.assertLess(content.index(route), content.index("handle_path /_portfolio/*"))
+
     def test_chrome_route_can_be_disabled_and_is_not_added_to_static_sites(self) -> None:
         site = {"name": "app", "hostname": "app.home.internal", "port": 8080}
         plain = setup_caddy.generate_caddyfile(
             [site], Path("/etc/caddy/certs/wiring-harness"), Path("/home/operator"), None
         )
-        self.assertEqual(plain.count("/_portfolio"), 1)  # only the snippet definition
+        self.assertEqual(plain.count("/_portfolio"), 2)  # only the snippet definition (writer route + files)
         static = {"name": "b", "hostname": "b.home.internal", "static_root": "/srv/b"}
         content = setup_caddy.generate_caddyfile(
             [static], Path("/etc/caddy/certs/wiring-harness"), Path("/home/operator"), "/srv/chrome"
         )
-        self.assertEqual(content.count("/_portfolio"), 1)  # only the snippet definition
+        self.assertEqual(content.count("/_portfolio"), 2)  # only the snippet definition (writer route + files)
 
     def test_chrome_root_must_be_canonical_and_injection_safe(self) -> None:
         for bad in ("relative/dir", "/srv/../etc", "/srv/a b", "/srv/x}\nimport", "/", "/srv//x"):
@@ -113,7 +122,7 @@ class CaddyStaticRootTests(unittest.TestCase):
             Path("/c"),
             Path("/h"),
         )
-        self.assertIn("(portfolio_chrome) {\n\thandle_path /_portfolio/* {\n\t\troot * {args[0]}", content)
+        self.assertIn("(portfolio_chrome) {\n\thandle /_portfolio/global {\n\t\treverse_proxy 127.0.0.1:8767\n\t}\n\thandle_path /_portfolio/* {\n\t\troot * {args[0]}", content)
         self.assertLess(content.index("(portfolio_chrome)"), content.index("import /etc/caddy/Caddyfile.d/"))
 
     def test_fallback_nav_lists_mtls_services_from_the_registry_only(self) -> None:
@@ -146,7 +155,8 @@ class CaddyStaticRootTests(unittest.TestCase):
         self.assertIn("root * /srv/bench/results", content)
         self.assertIn("file_server browse {\n\t\tindex latest.html\n\t}", content)
         self.assertIn("mode require_and_verify", content)
-        self.assertNotIn("reverse_proxy", content)
+        self.assertNotIn("reverse_proxy /", content)
+        self.assertNotIn("handle {\n\t\treverse_proxy", content)  # a static site has no upstream
 
     def test_static_root_rejects_upstream_fields(self) -> None:
         for field, value in (("port", 8080), ("unix_socket", "/run/x.sock"), ("proxy_headers", {"X": "y"})):
