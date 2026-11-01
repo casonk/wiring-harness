@@ -58,10 +58,16 @@ DEFAULT_SYSTEM_CERTS_DIR = Path("/etc/caddy/certs/wiring-harness")
 # and its navigation file, written by Clockwork. Override with WH_CHROME_ROOT.
 DEFAULT_CHROME_ROOT = Path(os.environ.get("WH_CHROME_ROOT", "/srv/portfolio-chrome"))
 CHROME_PREFIX = "/_portfolio"
+# The global theme write (POST /_portfolio/global) goes to traction-control's local theme writer
+# (scripts/portfolio_theme_writer.py), which binds 127.0.0.1 only. Override with WH_THEME_WRITER.
+THEME_WRITER = os.environ.get("WH_THEME_WRITER", "127.0.0.1:8767")
 # A repository that keeps its own Caddy drop-in (ingress = "repo-caddy") serves the same shared
 # directory with one line in its site block: `import portfolio_chrome /srv/portfolio-chrome`.
 CHROME_SNIPPET = (
     "(portfolio_chrome) {\n"
+    f"\thandle {CHROME_PREFIX}/global {{\n"
+    f"\t\treverse_proxy {THEME_WRITER}\n"
+    "\t}\n"
     f"\thandle_path {CHROME_PREFIX}/* {{\n"
     "\t\troot * {args[0]}\n"
     "\t\theader Cache-Control no-cache\n"
@@ -268,6 +274,9 @@ def _site_block(
         )
     elif chrome_root is not None:
         handler = (
+            f"\thandle {CHROME_PREFIX}/global {{\n"
+            f"\t\treverse_proxy {THEME_WRITER}\n"
+            f"\t}}\n"
             f"\thandle_path {CHROME_PREFIX}/* {{\n"
             f"\t\troot * {chrome_root}\n"
             f"\t\theader Cache-Control no-cache\n"

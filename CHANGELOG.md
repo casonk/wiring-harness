@@ -4,6 +4,7 @@ All notable changes to `wiring-harness` are documented here.
 
 ## Unreleased
 
+- Route `POST /_portfolio/global` on every proxied site (and in the `portfolio_chrome` snippet) to traction-control's local theme writer on `127.0.0.1:8767` (`WH_THEME_WRITER` overrides), ahead of the static `/_portfolio/*` files, so the top bar's "Everywhere" theme choice reaches the global theme. Regenerate the Caddyfile and reload Caddy for it to take effect.
 - Define a `(portfolio_chrome)` Caddy snippet so a `repo-caddy` repository serves `/_portfolio/*` with one
   `import` line, and have provisioning fill the shared chrome directory without Clockwork: theme files via
   traction-control's `portfolio_sites.py publish` and a registry-only `nav.json`.
