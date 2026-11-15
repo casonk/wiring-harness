@@ -4,6 +4,7 @@
 [repository]
 # One line shown on GitHub. Keep it free of private repository names and local paths.
 description = "Shared Caddy, mTLS, and DNS provisioning for the home server portfolio"
+topics = ["caddy", "mtls", "dns", "reverse-proxy", "home-server", "python"]
 
 [main_branch]
 # Direct commits and pushes to main are refused unless this is true.
