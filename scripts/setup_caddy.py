@@ -77,7 +77,7 @@ CHROME_SNIPPET = (
     "}"
 )
 # Sites with `pin = true` ask the PIN gate (scripts/pin_gate.py, loopback only) before serving.
-PIN_GATE = os.environ.get("WH_PIN_GATE", "127.0.0.1:8768")
+PIN_GATE = os.environ.get("WH_PIN_GATE", "127.0.0.1:8781")
 TRACTION_CONTROL_SITES = REPO_ROOT.parent / "traction-control" / "scripts" / "portfolio_sites.py"
 DEFAULT_OUTPUT = REPO_ROOT / "config" / "caddy" / "Caddyfile.combined.local"
 DEFAULT_INVENTORY_OUTPUT = REPO_ROOT / "config" / "private-sites.inventory.local.md"
