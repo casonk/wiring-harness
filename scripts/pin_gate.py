@@ -57,7 +57,7 @@ VERIFY_PATH = "/_pin/verify"
 MAX_BODY = 1024
 SECRET_CACHE_SECONDS = 600
 SIGNING_KEY_ENTRY = "portfolio/pin-signing-key"
-DEFAULT_VAULT = "master"
+DEFAULT_VAULT = "infra"
 CHANNELS = ("signal", "telegram", "gmail")
 SERVICE_SCRIPTS = {
     "signal": "services/signal-cli/send_message.py",

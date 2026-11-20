@@ -247,6 +247,9 @@ class ChangePinTests(unittest.TestCase):
 
 
 class AutoPassSecretsTests(unittest.TestCase):
+    def test_defaults_to_the_infra_vault_never_master(self) -> None:
+        self.assertEqual(pin_gate.AutoPassSecrets().vault, "infra")
+
     def test_reads_through_the_daemon_from_the_named_vault_and_caches(self) -> None:
         calls = []
 

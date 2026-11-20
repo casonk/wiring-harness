@@ -4,6 +4,8 @@ All notable changes to `wiring-harness` are documented here.
 
 ## Unreleased
 
+- Read and write the PIN gate's secrets in the `infra` vault instead of `master` (`WH_PIN_VAULT` still overrides), so the
+  gate is never granted access to the vault that holds the other vaults' passwords.
 - Add a Change PIN page (`/_pin/change`, linked from the keypad) to the PIN gate. It verifies the current PIN under
   the same lockouts, rejects weak or unchanged PINs, writes through auto-pass's scoped `set` operation, reads the value
   back, signs other devices out, and announces the change through shock-relay. Needs `writable_paths` in auto-pass's
