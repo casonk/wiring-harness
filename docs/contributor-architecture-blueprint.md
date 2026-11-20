@@ -21,6 +21,7 @@
 - `services.toml` is the tracked source of truth for shared service ingress.
 - `scripts/setup-mtls.sh` owns certificate and profile generation.
 - `scripts/setup_caddy.py` owns Caddyfile rendering and system provisioning.
+- `scripts/pin_gate.py` is the loopback PIN service the rendered Caddyfile calls (`forward_auth`) for `pin = true` sites; it reads PINs from auto-pass and keeps lockout counters in an owner-only state file.
   It rejects mixed TCP/Unix declarations and renders Unix backends with
   Caddy's `unix//absolute/path.sock` address form.
 - `scripts/render_macos_private_edge.py` owns the narrow Air render contract:

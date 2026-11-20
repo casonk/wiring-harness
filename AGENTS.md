@@ -17,6 +17,7 @@ Service-specific systemd units and sudoers rules stay in each service's own repo
 - `services.toml`: private site registry — one `[[services]]` entry per private browser/admin endpoint
 - `scripts/setup-mtls.sh`: generates CA, server cert, client cert, mobileconfig, dnsmasq snippet
 - `scripts/setup_caddy.py`: reads services.toml, generates Caddyfile, provisions system
+- `scripts/pin_gate.py`: loopback PIN gate for `pin = true` sites (per-site and per-IP lockouts, auto-pass secrets); see `docs/pin-gate.md`
 - `scripts/bootstrap_macos_air_pki.py`: creates and validates owner-only Air PKI material
 - `scripts/export_macos_air_profiles.py`: creates owner-only Mini/Pro Apple profiles from the Air CA
 - `scripts/render_macos_private_edge.py`: renders an inert, IP-literal macOS Caddy/launchd bundle
