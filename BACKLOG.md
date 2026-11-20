@@ -10,6 +10,17 @@ Mark items `[x]` when complete and move them to Done.
 
 ## Pending
 
+- [ ] [manual:2026-11-20] **Change the 16 default PINs** — every `pin = true` site still
+  uses the placeholder `0000`. Open each site, use **Change PIN** on its keypad, and
+  pick a PIN that `pin_gate.py` accepts (no repeats or runs). Needs the auto-pass daemon
+  unlocked and `writable_paths` for `portfolio/pin/*` in the local allowlist. Done when
+  `auto-pass provision-get --db infra portfolio/pin/<site>` no longer returns `0000` for
+  any site. See `docs/pin-gate.md`.
+- [ ] [manual:2026-11-20] **Decide whether PINs need periodic rotation** — the Change PIN
+  page covers on-demand changes. Decide whether to add a reminder or an age report (for
+  example flagging a PIN unchanged for 90 days) and, if so, where it should live.
+  Lockout alerts already go to Signal, Telegram and Gmail.
+
 - [ ] [manual:2026-10-15] **Ask GitHub Support to purge pre-rewrite commits** — this
   repository's published history was rewritten (most recently on 2026-10-15,
   to remove per-commit AI attribution trailers). GitHub keeps serving the old
