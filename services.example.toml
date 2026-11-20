@@ -25,6 +25,9 @@ hostname    = "app.home.internal"
 access_mode = "shared-mtls"
 ingress     = "wiring-harness-caddy"
 port        = 3000
+# Optional per-site PIN (see docs/pin-gate.md); needs ingress = "wiring-harness-caddy".
+# pin           = true
+# pin_ttl_hours = 12
 
 # Required macOS Air edge role. The reviewed backend is fixed at loopback
 # 127.0.0.1:5001. Port 8443 stays unprivileged for a user LaunchAgent.

@@ -4,6 +4,10 @@ All notable changes to `wiring-harness` are documented here.
 
 ## Unreleased
 
+- Add an optional per-site PIN gate: `pin = true` in the registry sends a shared-Caddy site through
+  `forward_auth` to `scripts/pin_gate.py`, which checks a 4-digit PIN kept in auto-pass (one entry per
+  site, plus a signing key), enforces per-site and per-IP lockouts with doubling backoff, and reports new
+  locks through shock-relay. See `docs/pin-gate.md`. Regenerate the Caddyfile to apply.
 - Route `POST /_portfolio/global` on every proxied site (and in the `portfolio_chrome` snippet) to traction-control's local theme writer on `127.0.0.1:8767` (`WH_THEME_WRITER` overrides), ahead of the static `/_portfolio/*` files, so the top bar's "Everywhere" theme choice reaches the global theme. Regenerate the Caddyfile and reload Caddy for it to take effect.
 - Define a `(portfolio_chrome)` Caddy snippet so a `repo-caddy` repository serves `/_portfolio/*` with one
   `import` line, and have provisioning fill the shared chrome directory without Clockwork: theme files via

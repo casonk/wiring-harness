@@ -179,5 +179,55 @@ class CaddyStaticRootTests(unittest.TestCase):
                     setup_caddy._resolve_static_index({"name": "bad", "static_index": index})
 
 
+class CaddyPinTests(unittest.TestCase):
+    CERTS = Path("/etc/caddy/certs/wiring-harness")
+    HOME = Path("/home/operator")
+
+    def _render(self, **extra) -> str:
+        site = {"name": "app", "hostname": "app.home.internal", "port": 8080, **extra}
+        return setup_caddy.generate_caddyfile([site], self.CERTS, self.HOME)
+
+    def test_unflagged_sites_are_unchanged(self) -> None:
+        content = self._render()
+        self.assertNotIn("forward_auth", content)
+        self.assertNotIn("/_pin/", content)
+        self.assertEqual(content, self._render(pin=False))
+
+    def test_pin_site_asks_the_gate_before_proxying(self) -> None:
+        content = self._render(pin=True, ingress="wiring-harness-caddy")
+        self.assertIn("handle /_pin/* {", content)
+        self.assertIn("forward_auth 127.0.0.1:8768 {", content)
+        self.assertIn("uri /_pin/verify", content)
+        self.assertEqual(content.count("header_up X-Pin-Site app"), 2)
+        self.assertLess(content.index("forward_auth"), content.index("reverse_proxy 127.0.0.1:8080"))
+
+    def test_pin_requires_shared_caddy_ingress(self) -> None:
+        for ingress in ("direct", "repo-caddy"):
+            with self.subTest(ingress=ingress), self.assertRaisesRegex(ValueError, "wiring-harness-caddy"):
+                self._render(pin=True, ingress=ingress)
+
+    def test_pin_site_name_cannot_inject_caddyfile_text(self) -> None:
+        with self.assertRaises(ValueError):
+            self._render(name="app\nrespond 200", pin=True, ingress="wiring-harness-caddy")
+
+    def test_pin_ttl_is_bounded(self) -> None:
+        for hours in (0, -1, 169, "12", True):
+            with self.subTest(hours=hours), self.assertRaises(ValueError):
+                self._render(pin=True, ingress="wiring-harness-caddy", pin_ttl_hours=hours)
+        self._render(pin=True, ingress="wiring-harness-caddy", pin_ttl_hours=0.5)
+
+    def test_static_sites_can_be_pin_protected(self) -> None:
+        site = {
+            "name": "docs",
+            "hostname": "docs.home.internal",
+            "static_root": "/srv/site",
+            "pin": True,
+            "ingress": "wiring-harness-caddy",
+        }
+        content = setup_caddy.generate_caddyfile([site], self.CERTS, self.HOME)
+        self.assertIn("forward_auth", content)
+        self.assertIn("file_server browse", content)
+
+
 if __name__ == "__main__":
     unittest.main()

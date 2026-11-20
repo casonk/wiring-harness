@@ -1,0 +1,22 @@
+# Copy to ~/.config/systemd/user/wiring-harness-pin-gate.service, set the paths, then:
+#   systemctl --user daemon-reload && systemctl --user enable --now wiring-harness-pin-gate
+[Unit]
+Description=wiring-harness PIN gate (loopback only)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=<path-to>/wiring-harness
+ExecStart=/usr/bin/python3 scripts/pin_gate.py serve
+# Lockout alert targets for shock-relay (all optional; unset channels are skipped).
+# Put real values in a gitignored env file, not in this unit.
+EnvironmentFile=-%h/.config/wiring-harness/pin-gate.env
+SyslogIdentifier=wiring-harness-pin-gate
+Restart=on-failure
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=%h/.local/state/wiring-harness
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

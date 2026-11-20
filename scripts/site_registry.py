@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 import tomllib
 from pathlib import Path
 
@@ -48,6 +49,24 @@ def _default_access_mode(site: dict) -> str:
     return "shared-mtls"
 
 
+PIN_SITE_NAME = re.compile(r"[a-z0-9][a-z0-9_-]*\Z")
+MAX_PIN_TTL_HOURS = 168
+
+
+def validate_pin(site: dict) -> None:
+    """A PIN is only enforced by the shared Caddy, so any other ingress must not claim one."""
+    if not site.get("pin"):
+        return
+    name = site.get("name", "")
+    if site.get("ingress") != "wiring-harness-caddy":
+        raise ValueError(f"{name}: pin = true requires ingress = \"wiring-harness-caddy\"")
+    if not PIN_SITE_NAME.match(name):
+        raise ValueError(f"{name}: a PIN site name must be lowercase letters, digits, '-' or '_'")
+    hours = site.get("pin_ttl_hours", 12)
+    if isinstance(hours, bool) or not isinstance(hours, (int, float)) or not 0 < hours <= MAX_PIN_TTL_HOURS:
+        raise ValueError(f"{name}: pin_ttl_hours must be a number above 0 and at most {MAX_PIN_TTL_HOURS}")
+
+
 def load_sites(services_path: Path = DEFAULT_SERVICES_TOML) -> list[dict]:
     """Return the merged site registry with defaults applied."""
     sites: list[dict] = []
@@ -59,6 +78,7 @@ def load_sites(services_path: Path = DEFAULT_SERVICES_TOML) -> list[dict]:
         site.setdefault("ingress", _default_ingress(site))
         site.setdefault("access_mode", _default_access_mode(site))
         site.setdefault("dns_enabled", True)
+        validate_pin(site)
         sites.append(site)
     return sites
 
