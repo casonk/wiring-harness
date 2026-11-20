@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 DEFAULT_SNOWBRIDGE_REPO="${REPO_ROOT}/../snowbridge"
-DEFAULT_IMAGE="localhost/filebrowser-snowbridge:dirsize"
+DEFAULT_IMAGE="localhost/snowbridge-filebrowser:dirsize"
 SERVICE_NAME="filebrowser"
 
 SNOWBRIDGE_REPO="${DEFAULT_SNOWBRIDGE_REPO}"
@@ -35,7 +35,7 @@ Options:
   --snowbridge-repo PATH      Snowbridge repo path. Default: ../snowbridge
   --env-file PATH             Snowbridge env file to update. Default: config/web/filebrowser/filebrowser.env.local
   --compose-file PATH         Snowbridge compose file. Default: config/web/filebrowser/docker-compose.example.yml
-  --image NAME[:TAG]          Image tag to deploy. Default: localhost/filebrowser-snowbridge:dirsize
+  --image NAME[:TAG]          Image tag to deploy. Default: localhost/snowbridge-filebrowser:dirsize
   --container-tool TOOL       Build image with `podman` or `docker`. Auto-detected when omitted.
   --skip-build                Reuse an already-built image tag and only update env + recreate.
   --pull                      Ask the container builder to refresh base images.
