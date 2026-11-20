@@ -46,7 +46,7 @@ from site_registry import DEFAULT_SERVICES_TOML, load_sites
 
 LOG = logging.getLogger("wiring-harness.pin-gate")
 
-DEFAULT_PORT = 8768
+DEFAULT_PORT = 8781
 DEFAULT_TTL_HOURS = 12.0
 COOKIE_NAME = "__Host-pin"
 PIN_RE = re.compile(r"\d{4}\Z")
