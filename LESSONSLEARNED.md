@@ -144,3 +144,5 @@ Tracked durable lessons for `wiring-harness`.
 - A Caddy `forward_auth` placed inside a `handle` block runs before the nested `handle` routes only because the
   adapter emits it first; after changing how a gated site block is nested, confirm the order with
   `caddy adapt --config <file>` rather than trusting the directive-order table.
+- Before choosing a default loopback port for a new service, check both the registries and `ss -ltn`: ports in the
+  8765-8770 range are already taken by sibling services, and a clash only shows up when the unit first starts.

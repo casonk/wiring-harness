@@ -196,7 +196,7 @@ class CaddyPinTests(unittest.TestCase):
     def test_pin_site_asks_the_gate_before_proxying(self) -> None:
         content = self._render(pin=True, ingress="wiring-harness-caddy")
         self.assertIn("handle /_pin/* {", content)
-        self.assertIn("forward_auth 127.0.0.1:8768 {", content)
+        self.assertIn("forward_auth 127.0.0.1:8781 {", content)
         self.assertIn("uri /_pin/verify", content)
         self.assertEqual(content.count("header_up X-Pin-Site app"), 2)
         self.assertLess(content.index("forward_auth"), content.index("reverse_proxy 127.0.0.1:8080"))
