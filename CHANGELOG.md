@@ -4,6 +4,10 @@ All notable changes to `wiring-harness` are documented here.
 
 ## Unreleased
 
+- Add a Change PIN page (`/_pin/change`, linked from the keypad) to the PIN gate. It verifies the current PIN under
+  the same lockouts, rejects weak or unchanged PINs, writes through auto-pass's scoped `set` operation, reads the value
+  back, signs other devices out, and announces the change through shock-relay. Needs `writable_paths` in auto-pass's
+  allowlist; see `docs/pin-gate.md`.
 - Add an optional per-site PIN gate: `pin = true` in the registry sends a shared-Caddy site through
   `forward_auth` to `scripts/pin_gate.py`, which checks a 4-digit PIN kept in auto-pass (one entry per
   site, plus a signing key), enforces per-site and per-IP lockouts with doubling backoff, and reports new
