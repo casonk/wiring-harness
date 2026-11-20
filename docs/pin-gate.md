@@ -54,6 +54,34 @@ the service after changing one for it to take effect at once. Create the entries
 (see `auto-pass set --help`); do not paste a PIN into a shell argument. After that, PINs change from the keypad's
 Change PIN page.
 
+## Surviving a reboot: the sealed key
+
+Reading every PIN from the vault means every gated site answers 503 after a reboot until someone unlocks auto-pass,
+including the auto-pass web page that could have unlocked it. **Sealed mode** removes that dependency while leaving
+the vault locked.
+
+- `scripts/seal_pin_key.sh` (run once with `sudo`) makes 32 random bytes and seals them to this machine's TPM2 with
+  `systemd-creds` (PCR 7, the same policy ignition uses for the data volumes). The key is never written or printed
+  in the clear.
+- The gate then runs as a **system** unit (`config/systemd/wiring-harness-pin-gate.system.service.example`) running as
+  your user, with `LoadCredentialEncrypted=`. systemd unseals the key at start and gives it to that service only.
+- From it the gate derives a keyed fingerprint of each PIN, `HMAC(key, site|pin)`, and the cookie-signing key. The
+  fingerprints live in the state file. They are not PINs and cannot be brute-forced offline without the TPM key.
+- Whenever the vault is reachable (at start, hourly, and when a PIN changes) the gate refreshes the fingerprints from
+  it. After that a locked vault no longer matters for unlocking: sites keep asking for their PIN and accept it.
+- A PIN edited directly in the vault is noticed at the next refresh: its rotation clock restarts and its sessions end.
+- **Changing a PIN still needs the vault unlocked**, because the vault is the source of truth. With it locked the
+  page says the PIN is unchanged.
+- No sealed key, or one that will not load, means the old behaviour: every check reads the vault.
+
+What it does not do: anything running as your user while the gate runs could read the unsealed key, so this protects
+against someone with the disk or a cold boot, not against code already running as you. The vault itself, and
+everything else in it, is never exposed to the gate. It needs no more than the PIN entries it already has.
+
+After a firmware update or a Secure Boot change the TPM will refuse the old key and the unit will not start (the
+gated sites then stay closed). Re-seal with `sudo bash scripts/seal_pin_key.sh --force`, as for ignition's `--rebind`;
+the fingerprints are rebuilt the next time the vault is unlocked, and until then the gate needs the vault again.
+
 ## Changing a PIN
 
 Every keypad has a **Change PIN** link to `/_pin/change` on the same site. It asks for the current PIN, the
@@ -79,7 +107,7 @@ allowed_paths  = ["portfolio/pin/*", "portfolio/pin-signing-key"]
 writable_paths = ["portfolio/pin/*"]      # the signing key stays read-only
 ```
 
-then restart and unlock the daemon so it loads the `set` operation. Without `writable_paths` the page still opens
+then restart and unlock the daemon so it loads the `set` operation (a write always needs the vault). Without `writable_paths` the page still opens
 but a change fails with "unchanged".
 
 ## Rotation
