@@ -4,6 +4,9 @@ All notable changes to `wiring-harness` are documented here.
 
 ## Unreleased
 
+- Fix the keypad refusing real submissions with "cross-origin request refused": the sites send
+  `Referrer-Policy: no-referrer`, so browsers send `Origin: null` on same-origin form posts. The same-origin check now
+  trusts `Sec-Fetch-Site` where present and treats a `null` Origin as same-origin; foreign sites are still refused.
 - Move the PIN gate's default port from 8768 to 8781: 8768 is the tradility trader service's loopback port, so the gate
   could not start beside it. Regenerate the Caddyfile to pick up the new `forward_auth` target.
 - Read and write the PIN gate's secrets in the `infra` vault instead of `master` (`WH_PIN_VAULT` still overrides), so the

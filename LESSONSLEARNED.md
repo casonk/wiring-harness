@@ -146,3 +146,6 @@ Tracked durable lessons for `wiring-harness`.
   `caddy adapt --config <file>` rather than trusting the directive-order table.
 - Before choosing a default loopback port for a new service, check both the registries and `ss -ltn`: ports in the
   8765-8770 range are already taken by sibling services, and a clash only shows up when the unit first starts.
+- Under `Referrer-Policy: no-referrer` browsers send `Origin: null` on same-origin form posts, so a CSRF check that
+  compares `Origin` to `Host` refuses real users. Prefer `Sec-Fetch-Site: same-origin` and test with the headers a
+  browser really sends, not a hand-written matching `Origin`.
