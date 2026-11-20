@@ -183,9 +183,11 @@ class AutoPassSecretsTests(unittest.TestCase):
 
     def test_a_refused_read_fails_closed(self) -> None:
         refused = subprocess.CompletedProcess([], 1, stdout="", stderr="not permitted")
-        with mock.patch.object(pin_gate.subprocess, "run", return_value=refused):
-            with self.assertRaises(pin_gate.SecretError):
-                pin_gate.AutoPassSecrets().get("portfolio/pin/app")
+        with (
+            mock.patch.object(pin_gate.subprocess, "run", return_value=refused),
+            self.assertRaises(pin_gate.SecretError),
+        ):
+            pin_gate.AutoPassSecrets().get("portfolio/pin/app")
 
 
 class HelperTests(unittest.TestCase):
