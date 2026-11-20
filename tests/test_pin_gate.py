@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import http.client
 import json
 import subprocess
@@ -26,14 +27,19 @@ class FakeSecrets:
         self.values = {**PINS, KEY_ENTRY: KEY, **(values or {})}
         self.write_fails = False
         self.write_is_lost = False
+        self.locked = False
 
     def get(self, entry: str) -> str:
+        if self.locked:
+            raise pin_gate.SecretError("vault is locked")
         try:
             return self.values[entry]
         except KeyError:
             raise pin_gate.SecretError(f"no secret {entry}") from None
 
     def set(self, entry: str, value: str) -> None:
+        if self.locked:
+            raise pin_gate.SecretError("vault is locked")
         if self.write_fails:
             raise pin_gate.SecretError("auto-pass refused")
         if not self.write_is_lost:
@@ -63,7 +69,7 @@ class Clock:
 DAY = 86400
 
 
-def make_gate(tmp: Path, clock: Clock, secrets=None, policy=None, rotation=None):
+def make_gate(tmp: Path, clock: Clock, secrets=None, policy=None, rotation=None, seal_key=None):
     sites = {
         "app": pin_gate.SiteConfig("app", "portfolio/pin/app", 12 * 3600),
         "docs": pin_gate.SiteConfig("docs", "portfolio/pin/docs", 3600),
@@ -75,7 +81,8 @@ def make_gate(tmp: Path, clock: Clock, secrets=None, policy=None, rotation=None)
     )
     notifier = FakeNotifier()
     rotation = pin_gate.Rotation(lockouts.store, rotation or pin_gate.RotationPolicy(), clock=clock)
-    gate = pin_gate.Gate(sites, secrets or FakeSecrets(), lockouts, notifier, clock=clock, rotation=rotation)
+    seal = pin_gate.Seal(seal_key, lockouts.store) if seal_key else None
+    gate = pin_gate.Gate(sites, secrets or FakeSecrets(), lockouts, notifier, clock=clock, rotation=rotation, seal=seal)
     return gate, notifier
 
 
@@ -443,6 +450,152 @@ class RotationHttpTests(unittest.TestCase):
         fresh = changed.getheader("Set-Cookie").split(";")[0]
         self.assertEqual(self.request("GET", "/_pin/verify", headers={"Cookie": fresh})[0].status, 204)
         self.assertEqual(self.request("GET", "/_pin/verify", headers={"Cookie": cookie})[0].status, 303)
+
+
+SEAL_KEY = b"k" * 32
+
+
+class SealedTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp = Path(self._tmp.name)
+        self.clock = Clock()
+        self.secrets = FakeSecrets()
+        self.gate, self.notifier = make_gate(self.tmp, self.clock, self.secrets, seal_key=SEAL_KEY)
+        self.gate.rotation.ensure(["app", "docs"])
+        self.site = self.gate.sites["app"]
+
+    def test_sync_seals_a_fingerprint_for_every_site(self) -> None:
+        self.assertEqual(self.gate.sync_sealed(), 2)
+        self.assertEqual(self.gate.sync_sealed(), 0)  # nothing new the second time
+        for name in ("app", "docs"):
+            self.assertIsNotNone(self.gate.seal.verifier_for(name))
+
+    def test_the_gate_keeps_working_with_the_vault_locked_once_sealed(self) -> None:
+        self.gate.sync_sealed()
+        self.secrets.locked = True
+        outcome, _, cookie = self.gate.attempt(self.site, "10.0.0.1", "4821")
+        self.assertEqual(outcome, "ok")
+        self.assertTrue(self.gate.has_valid_cookie(self.site, f"__Host-pin={cookie}"))
+        self.assertEqual(self.gate.attempt(self.site, "10.0.0.1", "0000")[0], "wrong")
+        self.assertEqual(self.gate.attempt(self.gate.sites["docs"], "10.0.0.1", "1357")[0], "ok")
+
+    def test_before_the_first_sync_the_vault_is_still_required(self) -> None:
+        self.secrets.locked = True
+        with self.assertRaises(pin_gate.SecretError):
+            self.gate.attempt(self.site, "10.0.0.1", "4821")
+
+    def test_without_a_sealed_key_nothing_changes(self) -> None:
+        gate, _ = make_gate(self.tmp / "plain", self.clock, self.secrets)
+        self.assertEqual(gate.sync_sealed(), 0)
+        self.assertEqual(gate.attempt(gate.sites["app"], "10.0.0.1", "4821")[0], "ok")
+
+    def test_the_state_file_holds_neither_pins_nor_the_key(self) -> None:
+        self.gate.sync_sealed()
+        text = json.dumps(self.gate.lockouts.store.snapshot())
+        for secret in ("4821", "1357", SEAL_KEY.decode(), KEY):
+            self.assertNotIn(secret, text)
+        unkeyed = hashlib.sha256(b"pin-verifier:app:4821").hexdigest()
+        self.assertNotIn(unkeyed, text)  # not reproducible without the key
+
+    def test_fingerprints_depend_on_the_key_and_the_site(self) -> None:
+        other = pin_gate.Seal(b"z" * 32, self.gate.lockouts.store)
+        self.assertNotEqual(self.gate.seal.compute("app", "4821"), other.compute("app", "4821"))
+        self.assertNotEqual(self.gate.seal.compute("app", "4821"), self.gate.seal.compute("docs", "4821"))
+        self.assertNotEqual(self.gate.seal.cookie_key(), other.cookie_key())
+
+    def test_a_pin_edited_in_the_vault_is_noticed_and_ends_sessions(self) -> None:
+        self.gate.sync_sealed()
+        cookie = self.gate.attempt(self.site, "10.0.0.1", "4821")[2]
+        self.clock.now += 100 * DAY
+        self.secrets.values["portfolio/pin/app"] = "7305"
+        self.assertEqual(self.gate.sync_sealed(), 1)
+        self.assertFalse(self.gate.has_valid_cookie(self.site, f"__Host-pin={cookie}"))
+        self.assertEqual(self.gate.attempt(self.site, "10.0.0.2", "7305")[0], "ok")
+        self.assertEqual(self.gate.rotation.status("app"), ("ok", 180))
+
+    def test_sync_skips_a_locked_vault_and_keeps_the_old_fingerprint(self) -> None:
+        self.gate.sync_sealed()
+        before = self.gate.seal.verifier_for("app")
+        self.secrets.locked = True
+        self.assertEqual(self.gate.sync_sealed(), 0)
+        self.assertEqual(self.gate.seal.verifier_for("app"), before)
+
+    def test_sync_refuses_to_seal_a_malformed_pin(self) -> None:
+        self.secrets.values["portfolio/pin/app"] = "12"
+        self.gate.sync_sealed()
+        self.assertIsNone(self.gate.seal.verifier_for("app"))
+
+    def test_changing_a_pin_updates_the_vault_and_the_fingerprint(self) -> None:
+        self.gate.sync_sealed()
+        outcome, _, cookie = self.gate.change_pin(self.site, "10.0.0.1", "4821", "7305", "7305")
+        self.assertEqual(outcome, "ok")
+        self.assertEqual(self.secrets.values["portfolio/pin/app"], "7305")
+        self.secrets.locked = True
+        self.assertTrue(self.gate.has_valid_cookie(self.site, f"__Host-pin={cookie}"))
+        self.assertEqual(self.gate.attempt(self.site, "10.0.0.2", "7305")[0], "ok")
+        self.assertEqual(self.gate.attempt(self.site, "10.0.0.2", "4821")[0], "wrong")
+
+    def test_changing_a_pin_needs_the_vault_and_otherwise_changes_nothing(self) -> None:
+        self.gate.sync_sealed()
+        self.secrets.locked = True
+        self.assertEqual(self.gate.change_pin(self.site, "10.0.0.1", "4821", "7305", "7305")[0], "unavailable")
+        self.assertEqual(self.gate.attempt(self.site, "10.0.0.2", "4821")[0], "ok")
+        self.assertEqual(self.gate.attempt(self.site, "10.0.0.2", "7305")[0], "wrong")
+
+    def test_reusing_the_current_pin_works_from_the_fingerprint_alone(self) -> None:
+        self.gate.sync_sealed()
+        self.secrets.locked = True
+        self.assertEqual(self.gate.change_pin(self.site, "10.0.0.1", "4821", "4821", "4821")[0], "ok")
+
+    def test_lockout_reset_keeps_the_fingerprints(self) -> None:
+        self.gate.sync_sealed()
+        self.gate.lockouts.store.reset(everything=True)
+        self.assertIsNotNone(self.gate.seal.verifier_for("app"))
+
+    def test_the_key_is_read_from_the_credentials_directory_or_an_override(self) -> None:
+        store = self.gate.lockouts.store
+        key_file = self.tmp / pin_gate.Seal.CREDENTIAL
+        key_file.write_bytes(SEAL_KEY + b"\n")
+        from_dir = pin_gate.Seal.from_environment(store, {"CREDENTIALS_DIRECTORY": str(self.tmp)})
+        from_override = pin_gate.Seal.from_environment(store, {"WH_PIN_SEAL_KEY_FILE": str(key_file)})
+        self.assertEqual(from_dir.compute("app", "4821"), self.gate.seal.compute("app", "4821"))
+        self.assertEqual(from_override.compute("app", "4821"), self.gate.seal.compute("app", "4821"))
+
+    def test_a_missing_or_short_key_means_vault_mode_not_a_crash(self) -> None:
+        store = self.gate.lockouts.store
+        self.assertIsNone(pin_gate.Seal.from_environment(store, {}))
+        self.assertIsNone(pin_gate.Seal.from_environment(store, {"WH_PIN_SEAL_KEY_FILE": str(self.tmp / "absent")}))
+        short = self.tmp / "short"
+        short.write_bytes(b"abc")
+        self.assertIsNone(pin_gate.Seal.from_environment(store, {"WH_PIN_SEAL_KEY_FILE": str(short)}))
+
+    def test_the_keypad_works_over_http_with_the_vault_locked(self) -> None:
+        self.gate.sync_sealed()
+        self.secrets.locked = True
+        server = ThreadingHTTPServer(("127.0.0.1", 0), pin_gate.make_handler(self.gate))
+        threading.Thread(target=server.serve_forever, args=(0.01,), daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        conn = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
+        conn.request(
+            "POST",
+            "/_pin/unlock",
+            body="pin=4821&next=/",
+            headers={
+                "X-Pin-Site": "app",
+                "X-Forwarded-For": "10.0.0.1",
+                "Host": "app.test",
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+        )
+        response = conn.getresponse()
+        response.read()
+        self.assertEqual(response.status, 303)
+        cookie = response.getheader("Set-Cookie").split(";")[0]
+        conn.request("GET", "/_pin/verify", headers={"X-Pin-Site": "app", "Cookie": cookie})
+        self.assertEqual(conn.getresponse().status, 204)
 
 
 class AutoPassSecretsTests(unittest.TestCase):

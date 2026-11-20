@@ -1,0 +1,29 @@
+# System-level unit for the PIN gate, so it starts at boot with a TPM-sealed key and the vault still locked.
+# Create the sealed key first:   sudo bash scripts/seal_pin_key.sh
+# Install (replace <user> and <path-to>), then switch from the user unit:
+#   sudo cp this-file /etc/systemd/system/wiring-harness-pin-gate.service
+#   systemctl --user disable --now wiring-harness-pin-gate     # only one may hold the port
+#   sudo systemctl daemon-reload && sudo systemctl enable --now wiring-harness-pin-gate
+[Unit]
+Description=wiring-harness PIN gate (loopback only)
+After=luks-volumes.service
+RequiresMountsFor=<path-to>/wiring-harness
+
+[Service]
+Type=simple
+User=<user>
+Environment=HOME=/home/<user>
+WorkingDirectory=<path-to>/wiring-harness
+# systemd unseals this with the TPM and hands it to this service only, as $CREDENTIALS_DIRECTORY/pin-seal-key.
+LoadCredentialEncrypted=pin-seal-key:/etc/credstore.encrypted/wiring-harness-pin-seal-key
+# Alert targets for shock-relay (optional, owner-only). Real values stay out of this file.
+EnvironmentFile=-/home/<user>/.config/wiring-harness/pin-gate.env
+ExecStart=/usr/bin/python3 scripts/pin_gate.py serve
+SyslogIdentifier=wiring-harness-pin-gate
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

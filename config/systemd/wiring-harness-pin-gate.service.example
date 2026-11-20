@@ -1,3 +1,5 @@
+# User-level unit: PINs are read from the vault, so every check needs auto-pass unlocked. For a gate that keeps
+# working after a reboot with the vault locked, use the system unit instead (see docs/pin-gate.md, sealed key).
 # Copy to ~/.config/systemd/user/wiring-harness-pin-gate.service, set the paths, then:
 #   systemctl --user daemon-reload && systemctl --user enable --now wiring-harness-pin-gate
 [Unit]
