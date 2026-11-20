@@ -56,6 +56,7 @@ VERIFY_PATH = "/_pin/verify"
 MAX_BODY = 1024
 SECRET_CACHE_SECONDS = 600
 SIGNING_KEY_ENTRY = "portfolio/pin-signing-key"
+DEFAULT_VAULT = "master"
 CHANNELS = ("signal", "telegram", "gmail")
 SERVICE_SCRIPTS = {
     "signal": "services/signal-cli/send_message.py",
@@ -246,8 +247,15 @@ class SecretError(RuntimeError):
 class AutoPassSecrets:
     """Reads secrets through the auto-pass provisioning daemon, caching them briefly."""
 
-    def __init__(self, command: str = "auto-pass", ttl: int = SECRET_CACHE_SECONDS, clock=time.monotonic) -> None:
+    def __init__(
+        self,
+        command: str = "auto-pass",
+        vault: str = DEFAULT_VAULT,
+        ttl: int = SECRET_CACHE_SECONDS,
+        clock=time.monotonic,
+    ) -> None:
         self.command = command
+        self.vault = vault
         self.ttl = ttl
         self.clock = clock
         self._cache: dict[str, tuple[float, str]] = {}
@@ -260,7 +268,7 @@ class AutoPassSecrets:
                 return cached[1]
         try:
             result = subprocess.run(
-                [self.command, "provision-get", entry],
+                [self.command, "provision-get", "--db", self.vault, entry],
                 capture_output=True,
                 text=True,
                 timeout=15,
@@ -600,7 +608,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         return 1
     gate = Gate(
         sites,
-        AutoPassSecrets(),
+        AutoPassSecrets(vault=os.environ.get("WH_PIN_VAULT", DEFAULT_VAULT)),
         Lockouts(StateStore(default_state_file()), Policy.from_env()),
         Notifier.from_env(),
         signing_key_entry=os.environ.get("WH_PIN_SIGNING_KEY_ENTRY", SIGNING_KEY_ENTRY),
