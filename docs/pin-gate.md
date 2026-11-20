@@ -24,7 +24,7 @@ letters, digits, `-` and `_`.
 ## How it works
 
 For a flagged site the generated Caddy block sends every request through `forward_auth` to
-`pin_gate.py` on `127.0.0.1:8768` (`WH_PIN_GATE` overrides), and sends `/_pin/*` to the same service.
+`pin_gate.py` on `127.0.0.1:8781` (`WH_PIN_GATE` overrides), and sends `/_pin/*` to the same service.
 Caddy sets an `X-Pin-Site` header, so a client cannot ask about a different site than the one it reached.
 
 - No valid cookie: a browser navigation is redirected (303) to the keypad; any other method gets 401.

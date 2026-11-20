@@ -4,6 +4,8 @@ All notable changes to `wiring-harness` are documented here.
 
 ## Unreleased
 
+- Move the PIN gate's default port from 8768 to 8781: 8768 is the tradility trader service's loopback port, so the gate
+  could not start beside it. Regenerate the Caddyfile to pick up the new `forward_auth` target.
 - Read and write the PIN gate's secrets in the `infra` vault instead of `master` (`WH_PIN_VAULT` still overrides), so the
   gate is never granted access to the vault that holds the other vaults' passwords.
 - Add a Change PIN page (`/_pin/change`, linked from the keypad) to the PIN gate. It verifies the current PIN under
