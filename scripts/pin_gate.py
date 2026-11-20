@@ -52,6 +52,7 @@ COOKIE_NAME = "__Host-pin"
 PIN_RE = re.compile(r"\d{4}\Z")
 SITE_RE = re.compile(r"[a-z0-9][a-z0-9_-]*\Z")
 UNLOCK_PATH = "/_pin/unlock"
+CHANGE_PATH = "/_pin/change"
 VERIFY_PATH = "/_pin/verify"
 MAX_BODY = 1024
 SECRET_CACHE_SECONDS = 600
@@ -283,6 +284,19 @@ class AutoPassSecrets:
             self._cache[entry] = (self.clock(), value)
         return value
 
+    def set(self, entry: str, value: str) -> None:
+        """Replace an existing entry's password through the daemon's scoped `set` operation."""
+        try:
+            from auto_pass.client import ProvisioningClient, ProvisioningClientError
+        except ImportError as exc:
+            raise SecretError("auto_pass is not importable; cannot change a PIN") from exc
+        try:
+            ProvisioningClient().set(entry, value, db=self.vault)
+        except (OSError, ProvisioningClientError) as exc:
+            raise SecretError(f"auto-pass refused to change {entry!r}: {exc}") from exc
+        with self._lock:
+            self._cache.pop(entry, None)
+
     def clear(self) -> None:
         with self._lock:
             self._cache.clear()
@@ -338,15 +352,23 @@ class Notifier:
     def notify(self, event: Newly) -> None:
         threading.Thread(target=self._send_all, args=(event,), daemon=True).start()
 
+    def announce(self, subject: str, body: str) -> None:
+        """Send a message to every channel off the request path (never carries a PIN)."""
+        threading.Thread(target=self._deliver, args=(subject, body), daemon=True).start()
+
     def _send_all(self, event: Newly) -> None:
         minutes = max(1, round(event.seconds / 60))
-        subject = f"wiring-harness: PIN lockout ({event.kind})"
-        body = f"Too many wrong PINs for {event.kind} {event.key}; locked for {minutes} min."
+        self._deliver(
+            f"wiring-harness: PIN lockout ({event.kind})",
+            f"Too many wrong PINs for {event.kind} {event.key}; locked for {minutes} min.",
+        )
+
+    def _deliver(self, subject: str, body: str) -> None:
         for channel, (target, config) in self.targets.items():
             try:
                 self._send(channel, target, config, subject, body)
             except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
-                LOG.warning("lockout notification via %s failed: %s", channel, exc)
+                LOG.warning("notification via %s failed: %s", channel, exc)
 
     def _send(self, channel: str, target: str, config: str | None, subject: str, body: str) -> None:
         script = self.root / SERVICE_SCRIPTS[channel]
@@ -385,6 +407,13 @@ def sites_from_registry(services_path: Path) -> dict[str, SiteConfig]:
         hours = float(site.get("pin_ttl_hours", DEFAULT_TTL_HOURS))
         configs[name] = SiteConfig(name, site.get("pin_entry") or f"portfolio/pin/{name}", int(hours * 3600))
     return configs
+
+
+def weak_pin(pin: str) -> bool:
+    """Repeated digits (0000) or a straight run up or down (1234, 8765) are the first guesses."""
+    digits = [int(ch) for ch in pin]
+    steps = {b - a for a, b in zip(digits, digits[1:], strict=False)}
+    return len(set(digits)) == 1 or steps in ({1}, {-1})
 
 
 def safe_next(value: str | None) -> str:
@@ -429,26 +458,65 @@ class Gate:
         key = self.secrets.get(self.signing_key_entry)
         return cookie_valid(value, key, site.name, pin, self.clock())
 
-    def attempt(self, site: SiteConfig, ip: str, guess: str) -> tuple[str, int, str | None]:
-        """Returns (outcome, lock_seconds, cookie). Outcome: ok, wrong, or locked."""
+    def _check_current(self, site: SiteConfig, ip: str, guess: str) -> tuple[str, int, str, str]:
+        """Check a PIN against the lockouts. Returns (outcome, lock_seconds, pin, signing_key)."""
         remaining = self.lockouts.locked_for(site.name, ip)
         if remaining:
             LOG.info("refused attempt on %s from %s: locked for %ss", site.name, ip, remaining)
-            return "locked", remaining, None
+            return "locked", remaining, "", ""
         pin = self.secrets.get(site.entry)
         key = self.secrets.get(self.signing_key_entry)
         if PIN_RE.match(guess or "") and hmac.compare_digest(guess.encode(), pin.encode()):
             self.lockouts.record_success(site.name)
-            expires = int(self.clock()) + site.ttl_seconds
-            LOG.info("unlocked %s for %s", site.name, ip)
-            return "ok", 0, make_cookie_value(key, site.name, pin, expires)
+            return "ok", 0, pin, key
         for event in self.lockouts.record_failure(site.name, ip):
             LOG.warning(
                 "lockout: %s %s for %ss (attempt on %s from %s)", event.kind, event.key, event.seconds, site.name, ip
             )
             self.notifier.notify(event)
         LOG.info("wrong PIN on %s from %s", site.name, ip)
-        return "wrong", self.lockouts.locked_for(site.name, ip), None
+        return "wrong", self.lockouts.locked_for(site.name, ip), "", ""
+
+    def _new_cookie(self, site: SiteConfig, pin: str, key: str) -> str:
+        return make_cookie_value(key, site.name, pin, int(self.clock()) + site.ttl_seconds)
+
+    def attempt(self, site: SiteConfig, ip: str, guess: str) -> tuple[str, int, str | None]:
+        """Returns (outcome, lock_seconds, cookie). Outcome: ok, wrong, or locked."""
+        outcome, seconds, pin, key = self._check_current(site, ip, guess)
+        if outcome != "ok":
+            return outcome, seconds, None
+        LOG.info("unlocked %s for %s", site.name, ip)
+        return "ok", 0, self._new_cookie(site, pin, key)
+
+    def change_pin(
+        self, site: SiteConfig, ip: str, current: str, new: str, confirm: str
+    ) -> tuple[str, int, str | None]:
+        """Change a site's PIN. Outcome: ok, wrong, locked, mismatch, weak, same or unavailable.
+
+        The current PIN is checked first and counts toward the same lockouts as unlocking, so this
+        form cannot be used to guess it. Only then is the new value judged, and only a value that
+        passes is written. Cookies are tied to the PIN, so every other device is signed out; the
+        caller gets a fresh cookie so this one stays unlocked.
+        """
+        outcome, seconds, pin, key = self._check_current(site, ip, current)
+        if outcome != "ok":
+            return outcome, seconds, None
+        if not PIN_RE.match(new or "") or new != confirm:
+            return "mismatch", 0, None
+        if new == pin:
+            return "same", 0, None
+        if weak_pin(new):
+            return "weak", 0, None
+        try:
+            self.secrets.set(site.entry, new)
+            if self.secrets.get(site.entry) != new:
+                raise SecretError("the stored PIN does not match what was written")
+        except SecretError as exc:
+            LOG.error("PIN change for %s failed: %s", site.name, exc)
+            return "unavailable", 0, None
+        LOG.warning("PIN for %s changed from %s; other devices are signed out", site.name, ip)
+        self.notifier.announce("wiring-harness: PIN changed", f"The PIN for {site.name} was changed from {ip}.")
+        return "ok", 0, self._new_cookie(site, new, key)
 
 
 def _cookie(header: str, name: str) -> str | None:
@@ -481,13 +549,63 @@ p{{margin:.8rem 0 0}} .err{{color:var(--danger,#ff6b6b)}}
 <input type="hidden" name="next" value="{next}">
 <div><button type="submit">Unlock</button></div>
 {message}
+<p><a href="{change}" style="color:inherit;font-size:.85rem">Change PIN</a></p>
+</form></body></html>
+"""
+
+CHANGE_PAGE = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Change PIN</title>
+<style>
+body{{margin:0;min-height:100vh;display:grid;place-items:center;font:16px system-ui,sans-serif;
+background:var(--bg,#0f1218);color:var(--fg,#e8ecf2)}}
+form{{text-align:center;padding:2rem;background:var(--surface,#181d27);border-radius:12px;min-width:16rem}}
+label{{display:block;margin-top:1rem;font-size:.85rem;text-align:left}}
+input[type=password]{{font:1.6rem monospace;letter-spacing:.5rem;width:100%;box-sizing:border-box;text-align:center;
+padding:.3rem;border-radius:8px;border:1px solid var(--border,#3a4254);background:transparent;color:inherit}}
+button{{margin-top:1.2rem;padding:.6rem 1.6rem;border-radius:8px;border:0;background:var(--accent,#4c8dff);
+color:#fff;font:inherit}}
+p{{margin:.8rem 0 0}} .err{{color:var(--danger,#ff6b6b)}}
+</style></head><body>
+<form method="post" action="{action}">
+<h1 style="font-size:1.1rem;margin:0">Change PIN</h1>
+<label>Current PIN<input type="password" name="current" inputmode="numeric" pattern="[0-9]{{4}}"
+ maxlength="4" autocomplete="off" autofocus required></label>
+<label>New PIN<input type="password" name="new" inputmode="numeric" pattern="[0-9]{{4}}"
+ maxlength="4" autocomplete="off" required></label>
+<label>New PIN again<input type="password" name="confirm" inputmode="numeric" pattern="[0-9]{{4}}"
+ maxlength="4" autocomplete="off" required></label>
+<input type="hidden" name="next" value="{next}">
+<div><button type="submit">Change PIN</button></div>
+{message}
+<p><a href="{unlock}" style="color:inherit;font-size:.85rem">Back</a></p>
 </form></body></html>
 """
 
 
 def render_page(next_path: str, message: str = "", error: bool = False) -> bytes:
     note = f'<p class="{"err" if error else ""}">{html.escape(message)}</p>' if message else ""
-    return PAGE.format(action=UNLOCK_PATH, next=html.escape(next_path, quote=True), message=note).encode()
+    return PAGE.format(
+        action=UNLOCK_PATH, change=CHANGE_PATH, next=html.escape(next_path, quote=True), message=note
+    ).encode()
+
+
+def render_change_page(next_path: str, message: str = "", error: bool = False) -> bytes:
+    note = f'<p class="{"err" if error else ""}">{html.escape(message)}</p>' if message else ""
+    return CHANGE_PAGE.format(
+        action=CHANGE_PATH, unlock=UNLOCK_PATH, next=html.escape(next_path, quote=True), message=note
+    ).encode()
+
+
+CHANGE_MESSAGES = {
+    "wrong": "Incorrect current PIN.",
+    "mismatch": "The new PIN must be four digits, entered the same way twice.",
+    "same": "The new PIN is the same as the current one.",
+    "weak": "Too easy to guess: avoid repeated digits and runs such as 1234.",
+    "unavailable": "The PIN could not be changed and is unchanged. Try again later.",
+}
 
 
 def lock_message(seconds: int) -> str:
@@ -543,6 +661,11 @@ def make_handler(gate: Gate):
                 remaining = gate.lockouts.locked_for(site.name, client_ip(self.headers))
                 message = lock_message(remaining) if remaining else ""
                 return self._send(HTTPStatus.OK, render_page(next_path, message, error=bool(remaining)))
+            if path == CHANGE_PATH:
+                next_path = safe_next(parse_qs(query).get("next", [""])[0])
+                remaining = gate.lockouts.locked_for(site.name, client_ip(self.headers))
+                message = lock_message(remaining) if remaining else ""
+                return self._send(HTTPStatus.OK, render_change_page(next_path, message, error=bool(remaining)))
             self._send(HTTPStatus.NOT_FOUND, b"not found")
 
         do_HEAD = do_GET  # noqa: N815
@@ -560,12 +683,35 @@ def make_handler(gate: Gate):
                 return self._redirect_to_unlock(safe_next(original))
             self._send(HTTPStatus.UNAUTHORIZED, b"PIN required")
 
+        def _change(self, site: SiteConfig, form: dict, next_path: str) -> None:
+            def field(name: str) -> str:
+                return form.get(name, [""])[0]
+
+            try:
+                outcome, seconds, cookie = gate.change_pin(
+                    site, client_ip(self.headers), field("current"), field("new"), field("confirm")
+                )
+            except SecretError as exc:
+                LOG.error("failing closed for %s: %s", site.name, exc)
+                return self._send(HTTPStatus.SERVICE_UNAVAILABLE, b"locked: secrets unavailable")
+            if outcome == "ok":
+                attrs = f"{COOKIE_NAME}={cookie}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age={site.ttl_seconds}"
+                return self._send(HTTPStatus.SEE_OTHER, headers={"Location": next_path, "Set-Cookie": attrs})
+            if outcome == "locked" or seconds:
+                return self._send(
+                    HTTPStatus.TOO_MANY_REQUESTS, render_change_page(next_path, lock_message(seconds), True)
+                )
+            status = HTTPStatus.SERVICE_UNAVAILABLE if outcome == "unavailable" else HTTPStatus.UNAUTHORIZED
+            if outcome in {"mismatch", "same", "weak"}:
+                status = HTTPStatus.UNPROCESSABLE_ENTITY
+            self._send(status, render_change_page(next_path, CHANGE_MESSAGES[outcome], True))
+
         def do_POST(self):  # noqa: N802
             path = self.path.partition("?")[0]
             site = self._site()
             if site is None:
                 return
-            if path != UNLOCK_PATH:
+            if path not in (UNLOCK_PATH, CHANGE_PATH):
                 return self._send(HTTPStatus.NOT_FOUND, b"not found")
             origin = self.headers.get("Origin")
             host = self.headers.get("Host", "")
@@ -579,8 +725,10 @@ def make_handler(gate: Gate):
             if not 0 <= length <= MAX_BODY:
                 return self._send(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, b"too large")
             form = parse_qs(self.rfile.read(length).decode("utf-8", "replace"))
-            guess = form.get("pin", [""])[0]
             next_path = safe_next(form.get("next", [""])[0])
+            if path == CHANGE_PATH:
+                return self._change(site, form, next_path)
+            guess = form.get("pin", [""])[0]
             try:
                 outcome, seconds, cookie = gate.attempt(site, client_ip(self.headers), guess)
             except SecretError as exc:
