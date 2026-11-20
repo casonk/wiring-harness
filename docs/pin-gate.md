@@ -82,6 +82,28 @@ writable_paths = ["portfolio/pin/*"]      # the signing key stays read-only
 then restart and unlock the daemon so it loads the `set` operation. Without `writable_paths` the page still opens
 but a change fails with "unchanged".
 
+## Rotation
+
+PINs expire. The limit is **180 days** from the last change (`WH_PIN_ROTATE_DAYS`; 0 turns rotation off).
+
+| Age | What happens |
+|---|---|
+| Under 150 days | nothing |
+| Last 30 days (`WH_PIN_WARN_DAYS`) | after a correct PIN, a notice shows the days left with **Change PIN now** and **Remind me later**; one alert goes out through shock-relay |
+| Past 180 days | the old PIN no longer opens the site. Entering it goes to the change page ("Your PIN has expired"), existing sessions end, and a second alert is sent. Changing the PIN restores access |
+
+The check that sends alerts runs hourly inside the service, and each alert is sent once per PIN and phase.
+`pin_gate.py status` lists every site's age and state.
+
+The clock starts when the gate first sees a site and restarts on each change made through the Change PIN page, so a
+PIN edited straight in the vault is not noticed. The ages live in the same owner-only state file as the lockouts;
+`pin_gate.py reset` leaves them alone.
+
+**Reuse.** The policy is that a PIN may not be reused, but for now the same PIN is allowed (`WH_PIN_ALLOW_REUSE`,
+default on). A reused PIN writes nothing and just restarts the clock. Weak PINs such as `0000` are still refused,
+including as a reused value, so the placeholder PINs must really change. Set `WH_PIN_ALLOW_REUSE=no` to enforce
+the policy; only the current PIN is compared, with no history of older ones.
+
 ## Lockouts
 
 Two independent counters; a request is refused while **either** holds, even with the correct PIN.

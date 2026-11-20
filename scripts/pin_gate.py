@@ -30,6 +30,7 @@ import hmac
 import html
 import json
 import logging
+import math
 import os
 import re
 import subprocess
@@ -53,6 +54,8 @@ PIN_RE = re.compile(r"\d{4}\Z")
 SITE_RE = re.compile(r"[a-z0-9][a-z0-9_-]*\Z")
 UNLOCK_PATH = "/_pin/unlock"
 CHANGE_PATH = "/_pin/change"
+NOTICE_PATH = "/_pin/notice"
+DAY = 86400
 VERIFY_PATH = "/_pin/verify"
 MAX_BODY = 1024
 SECRET_CACHE_SECONDS = 600
@@ -168,6 +171,7 @@ class StateStore:
                 data = {}
             data.setdefault("sites", {})
             data.setdefault("ips", {})
+            data.setdefault("pins", {})
             yield data
             temporary = self.path.with_name(self.path.name + ".tmp")
             temporary.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -198,6 +202,93 @@ class Newly:
     kind: str  # "site" or "ip"
     key: str
     seconds: int
+
+
+@dataclass(frozen=True)
+class RotationPolicy:
+    """How often PINs must change. ``max_age_days <= 0`` turns rotation off."""
+
+    max_age_days: int = 180
+    warn_days: int = 30
+    allow_reuse: bool = True
+
+    @classmethod
+    def from_env(cls, environ: dict[str, str] | None = None) -> RotationPolicy:
+        env = os.environ if environ is None else environ
+        defaults = cls()
+
+        def number(name: str, default: int) -> int:
+            raw = env.get(name, "").strip()
+            return int(raw) if raw else default
+
+        reuse = env.get("WH_PIN_ALLOW_REUSE", "").strip().lower()
+        return cls(
+            max_age_days=number("WH_PIN_ROTATE_DAYS", defaults.max_age_days),
+            warn_days=number("WH_PIN_WARN_DAYS", defaults.warn_days),
+            allow_reuse=defaults.allow_reuse if not reuse else reuse in {"1", "true", "yes", "on"},
+        )
+
+
+class Rotation:
+    """When each site's PIN was last changed, and what that means today.
+
+    A site is ``ok`` until its last 30 days, ``warn`` from then on, and ``overdue`` once the PIN is
+    older than the limit. The clock starts when the gate first sees a site and restarts on every
+    change made through the Change PIN page; a PIN edited directly in the vault is not noticed.
+    """
+
+    def __init__(self, store: StateStore, policy: RotationPolicy, clock=time.time) -> None:
+        self.store = store
+        self.policy = policy
+        self.clock = clock
+
+    @staticmethod
+    def _record(data: dict, site: str, now: float) -> dict:
+        return data["pins"].setdefault(site, {"changed": now})
+
+    def _classify(self, changed: float, now: float) -> tuple[str, int]:
+        if self.policy.max_age_days <= 0:
+            return "ok", 10**6
+        due = changed + self.policy.max_age_days * DAY
+        days_left = math.ceil((due - now) / DAY)
+        if now >= due:
+            return "overdue", days_left
+        if due - now <= self.policy.warn_days * DAY:
+            return "warn", days_left
+        return "ok", days_left
+
+    def status(self, site: str) -> tuple[str, int]:
+        """(``ok`` | ``warn`` | ``overdue``, whole days until the PIN is due; zero or less once overdue)."""
+        now = self.clock()
+        with self.store.transaction() as data:
+            record = self._record(data, site, now)
+            return self._classify(record["changed"], now)
+
+    def ensure(self, sites) -> None:
+        now = self.clock()
+        with self.store.transaction() as data:
+            for site in sites:
+                self._record(data, site, now)
+
+    def record_change(self, site: str) -> None:
+        with self.store.transaction() as data:
+            data["pins"][site] = {"changed": self.clock()}
+
+    def due_notices(self, sites) -> list[tuple[str, str, int]]:
+        """Notices not yet sent for this PIN: (site, ``warn`` | ``overdue``, days left). Marks them sent."""
+        now = self.clock()
+        notices: list[tuple[str, str, int]] = []
+        with self.store.transaction() as data:
+            for site in sites:
+                record = self._record(data, site, now)
+                state, days = self._classify(record["changed"], now)
+                if state == "overdue" and "overdue_sent" not in record:
+                    record["overdue_sent"] = now
+                    notices.append((site, "overdue", days))
+                elif state == "warn" and "warn_sent" not in record:
+                    record["warn_sent"] = now
+                    notices.append((site, "warn", days))
+        return notices
 
 
 class Lockouts:
@@ -459,7 +550,9 @@ class Gate:
         notifier: Notifier,
         signing_key_entry: str = SIGNING_KEY_ENTRY,
         clock=time.time,
+        rotation: Rotation | None = None,
     ) -> None:
+        self.rotation = rotation or Rotation(lockouts.store, RotationPolicy(), clock)
         self.sites = sites
         self.secrets = secrets
         self.lockouts = lockouts
@@ -471,6 +564,8 @@ class Gate:
         value = _cookie(cookie_header, COOKIE_NAME)
         if not value:
             return False
+        if self.rotation.status(site.name)[0] == "overdue":
+            return False  # an expired PIN ends existing sessions too
         pin = self.secrets.get(site.entry)
         key = self.secrets.get(self.signing_key_entry)
         return cookie_valid(value, key, site.name, pin, self.clock())
@@ -502,6 +597,9 @@ class Gate:
         outcome, seconds, pin, key = self._check_current(site, ip, guess)
         if outcome != "ok":
             return outcome, seconds, None
+        if self.rotation.status(site.name)[0] == "overdue":
+            LOG.info("correct PIN for %s from %s but it has expired; change required", site.name, ip)
+            return "expired", 0, None
         LOG.info("unlocked %s for %s", site.name, ip)
         return "ok", 0, self._new_cookie(site, pin, key)
 
@@ -520,10 +618,16 @@ class Gate:
             return outcome, seconds, None
         if not PIN_RE.match(new or "") or new != confirm:
             return "mismatch", 0, None
-        if new == pin:
-            return "same", 0, None
         if weak_pin(new):
             return "weak", 0, None
+        if new == pin:
+            if not self.rotation.policy.allow_reuse:
+                return "same", 0, None
+            # Reuse is allowed for now: nothing to write, but the rotation clock restarts.
+            self.rotation.record_change(site.name)
+            LOG.warning("PIN for %s renewed unchanged from %s", site.name, ip)
+            self.notifier.announce("wiring-harness: PIN renewed", f"The PIN for {site.name} was renewed from {ip}.")
+            return "ok", 0, self._new_cookie(site, pin, key)
         try:
             self.secrets.set(site.entry, new)
             if self.secrets.get(site.entry) != new:
@@ -531,9 +635,24 @@ class Gate:
         except SecretError as exc:
             LOG.error("PIN change for %s failed: %s", site.name, exc)
             return "unavailable", 0, None
+        self.rotation.record_change(site.name)
         LOG.warning("PIN for %s changed from %s; other devices are signed out", site.name, ip)
         self.notifier.announce("wiring-harness: PIN changed", f"The PIN for {site.name} was changed from {ip}.")
         return "ok", 0, self._new_cookie(site, new, key)
+
+    def send_rotation_notices(self) -> int:
+        """Announce each PIN that has entered its warning window or gone overdue, once."""
+        notices = self.rotation.due_notices(self.sites)
+        for site, kind, days in notices:
+            if kind == "overdue":
+                subject = "wiring-harness: PIN expired"
+                body = f"The PIN for {site} is past its rotation limit. Opening the site now requires changing it."
+            else:
+                subject = "wiring-harness: PIN due for rotation"
+                body = f"The PIN for {site} must be changed within {max(days, 0)} day{'s' if days != 1 else ''}."
+            LOG.warning("rotation notice for %s: %s (%s days)", site, kind, days)
+            self.notifier.announce(subject, body)
+        return len(notices)
 
 
 def _cookie(header: str, name: str) -> str | None:
@@ -616,10 +735,45 @@ def render_change_page(next_path: str, message: str = "", error: bool = False) -
     ).encode()
 
 
+NOTICE_PAGE = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>PIN due for rotation</title>
+<style>
+body{{margin:0;min-height:100vh;display:grid;place-items:center;font:16px system-ui,sans-serif;
+background:var(--bg,#0f1218);color:var(--fg,#e8ecf2)}}
+main{{text-align:center;padding:2rem;background:var(--surface,#181d27);border-radius:12px;max-width:22rem}}
+a.btn{{display:inline-block;margin:.4rem;padding:.6rem 1.4rem;border-radius:8px;text-decoration:none;
+background:var(--accent,#4c8dff);color:#fff}}
+a.quiet{{background:transparent;border:1px solid var(--border,#3a4254);color:inherit}}
+</style></head><body><main>
+<h1 style="font-size:1.1rem;margin:0 0 .8rem">Your PIN is due for rotation</h1>
+<p>{message}</p>
+<a class="btn" href="{change}">Change PIN now</a>
+<a class="btn quiet" href="{next}">Remind me later</a>
+</main></body></html>
+"""
+
+
+def render_notice_page(next_path: str, days_left: int) -> bytes:
+    days = max(days_left, 0)
+    message = (
+        f"It must be changed within {days} day{'s' if days != 1 else ''}, after which this site will ask for a new one."
+    )
+    return NOTICE_PAGE.format(
+        message=html.escape(message),
+        change=f"{CHANGE_PATH}?next={quote(next_path, safe='/')}",
+        next=html.escape(next_path, quote=True),
+    ).encode()
+
+
+EXPIRED_MESSAGE = "Your PIN has expired. Enter it once more and choose a new one to continue."
+
 CHANGE_MESSAGES = {
     "wrong": "Incorrect current PIN.",
     "mismatch": "The new PIN must be four digits, entered the same way twice.",
-    "same": "The new PIN is the same as the current one.",
+    "same": "The new PIN must differ from the current one.",
     "weak": "Too easy to guess: avoid repeated digits and runs such as 1234.",
     "unavailable": "The PIN could not be changed and is unchanged. Try again later.",
 }
@@ -679,13 +833,33 @@ def make_handler(gate: Gate):
                 message = lock_message(remaining) if remaining else ""
                 return self._send(HTTPStatus.OK, render_page(next_path, message, error=bool(remaining)))
             if path == CHANGE_PATH:
-                next_path = safe_next(parse_qs(query).get("next", [""])[0])
+                params = parse_qs(query)
+                next_path = safe_next(params.get("next", [""])[0])
                 remaining = gate.lockouts.locked_for(site.name, client_ip(self.headers))
-                message = lock_message(remaining) if remaining else ""
-                return self._send(HTTPStatus.OK, render_change_page(next_path, message, error=bool(remaining)))
+                if remaining:
+                    return self._send(HTTPStatus.OK, render_change_page(next_path, lock_message(remaining), True))
+                expired = params.get("reason", [""])[0] == "expired"
+                return self._send(
+                    HTTPStatus.OK, render_change_page(next_path, EXPIRED_MESSAGE if expired else "", error=expired)
+                )
+            if path == NOTICE_PATH:
+                return self._notice(site, safe_next(parse_qs(query).get("next", [""])[0]))
             self._send(HTTPStatus.NOT_FOUND, b"not found")
 
         do_HEAD = do_GET  # noqa: N815
+
+        def _notice(self, site: SiteConfig, next_path: str) -> None:
+            try:
+                unlocked = gate.has_valid_cookie(site, self.headers.get("Cookie", ""))
+            except SecretError as exc:
+                LOG.error("failing closed for %s: %s", site.name, exc)
+                return self._send(HTTPStatus.SERVICE_UNAVAILABLE, b"locked: secrets unavailable")
+            if not unlocked:
+                return self._redirect_to_unlock(next_path)
+            state, days = gate.rotation.status(site.name)
+            if state != "warn":
+                return self._send(HTTPStatus.SEE_OTHER, headers={"Location": next_path})
+            self._send(HTTPStatus.OK, render_notice_page(next_path, days))
 
         def _verify(self, site: SiteConfig) -> None:
             try:
@@ -749,9 +923,15 @@ def make_handler(gate: Gate):
             except SecretError as exc:
                 LOG.error("failing closed for %s: %s", site.name, exc)
                 return self._send(HTTPStatus.SERVICE_UNAVAILABLE, b"locked: secrets unavailable")
+            if outcome == "expired":
+                target = f"{CHANGE_PATH}?reason=expired&next={quote(next_path, safe='/')}"
+                return self._send(HTTPStatus.SEE_OTHER, headers={"Location": target})
             if outcome == "ok":
                 attrs = f"{COOKIE_NAME}={cookie}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age={site.ttl_seconds}"
-                return self._send(HTTPStatus.SEE_OTHER, headers={"Location": next_path, "Set-Cookie": attrs})
+                target = next_path
+                if gate.rotation.status(site.name)[0] == "warn":
+                    target = f"{NOTICE_PATH}?next={quote(next_path, safe='/')}"
+                return self._send(HTTPStatus.SEE_OTHER, headers={"Location": target, "Set-Cookie": attrs})
             if outcome == "locked" or seconds:
                 return self._send(HTTPStatus.TOO_MANY_REQUESTS, render_page(next_path, lock_message(seconds), True))
             self._send(HTTPStatus.UNAUTHORIZED, render_page(next_path, "Incorrect PIN.", True))
@@ -764,18 +944,32 @@ def make_handler(gate: Gate):
 # ---------------------------------------------------------------------------
 
 
+def _watch_rotation(gate: Gate, interval: int = 3600) -> None:
+    """Hourly: announce PINs entering their warning window or going overdue."""
+    while True:
+        try:
+            gate.send_rotation_notices()
+        except Exception:  # keep the watcher alive; one failed pass must not end the notices
+            LOG.warning("rotation notice pass failed", exc_info=True)
+        time.sleep(interval)
+
+
 def _cmd_serve(args: argparse.Namespace) -> int:
     sites = sites_from_registry(Path(args.services))
     if not sites:
         LOG.error("no sites with pin = true in %s", args.services)
         return 1
+    store = StateStore(default_state_file())
     gate = Gate(
         sites,
         AutoPassSecrets(vault=os.environ.get("WH_PIN_VAULT", DEFAULT_VAULT)),
-        Lockouts(StateStore(default_state_file()), Policy.from_env()),
+        Lockouts(store, Policy.from_env()),
         Notifier.from_env(),
         signing_key_entry=os.environ.get("WH_PIN_SIGNING_KEY_ENTRY", SIGNING_KEY_ENTRY),
+        rotation=Rotation(store, RotationPolicy.from_env()),
     )
+    gate.rotation.ensure(sites)
+    threading.Thread(target=_watch_rotation, args=(gate,), daemon=True).start()
     server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(gate))
     LOG.info("PIN gate on 127.0.0.1:%d for %s", args.port, ", ".join(sorted(sites)))
     try:
@@ -803,6 +997,10 @@ def _cmd_status(args: argparse.Namespace) -> int:
                 )
     if not rows:
         print("no active lockouts or failure counts")
+    rotation = Rotation(StateStore(default_state_file()), RotationPolicy.from_env())
+    for name in sorted(snapshot.get("pins", {})):
+        state, days = rotation.status(name)
+        print(f"pin {name}: {state}, {days} days until due")
     return 0
 
 
