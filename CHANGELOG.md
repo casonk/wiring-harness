@@ -4,6 +4,10 @@ All notable changes to `wiring-harness` are documented here.
 
 ## Unreleased
 
+- Add PIN rotation: PINs expire 180 days after their last change (`WH_PIN_ROTATE_DAYS`). The last 30 days show a notice
+  after unlocking and send one shock-relay alert; past the limit the old PIN only leads to the change page, existing
+  sessions end, and a second alert is sent. Reusing the current PIN is allowed for now (`WH_PIN_ALLOW_REUSE`) and
+  restarts the clock; weak PINs are still refused. `pin_gate.py status` shows ages.
 - Fix the keypad refusing real submissions with "cross-origin request refused": the sites send
   `Referrer-Policy: no-referrer`, so browsers send `Origin: null` on same-origin form posts. The same-origin check now
   trusts `Sec-Fetch-Site` where present and treats a `null` Origin as same-origin; foreign sites are still refused.

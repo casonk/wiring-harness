@@ -16,10 +16,10 @@ Mark items `[x]` when complete and move them to Done.
   unlocked and `writable_paths` for `portfolio/pin/*` in the local allowlist. Done when
   `auto-pass provision-get --db infra portfolio/pin/<site>` no longer returns `0000` for
   any site. See `docs/pin-gate.md`.
-- [ ] [manual:2026-11-20] **Decide whether PINs need periodic rotation** — the Change PIN
-  page covers on-demand changes. Decide whether to add a reminder or an age report (for
-  example flagging a PIN unchanged for 90 days) and, if so, where it should live.
-  Lockout alerts already go to Signal, Telegram and Gmail.
+- [ ] [manual:2026-11-20] **Enforce no-reuse for PINs** — rotation is live (180 days, 30-day
+  warning) but reusing the current PIN is still allowed (`WH_PIN_ALLOW_REUSE`). Once the
+  16 placeholder PINs have been changed, set `WH_PIN_ALLOW_REUSE=no` and decide whether to
+  also refuse older PINs (needs a salted-hash history in the gate's state file).
 
 - [ ] [manual:2026-10-15] **Ask GitHub Support to purge pre-rewrite commits** — this
   repository's published history was rewritten (most recently on 2026-10-15,
