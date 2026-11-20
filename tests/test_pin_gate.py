@@ -417,6 +417,35 @@ class ServerTests(unittest.TestCase):
             self.assertEqual(response.status, 403)
         self.assertEqual(self.gate.lockouts.store.snapshot()["sites"], {})
 
+    def test_origin_null_from_no_referrer_pages_is_allowed(self) -> None:
+        # The sites send Referrer-Policy: no-referrer, so browsers send Origin: null on same-origin posts.
+        for headers in (
+            {"Origin": "null", "Sec-Fetch-Site": "same-origin"},
+            {"Origin": "null"},
+            {"Sec-Fetch-Site": "same-origin"},
+        ):
+            with self.subTest(headers=headers):
+                self.assertEqual(self.unlock("4821", headers=headers)[0].status, 303)
+
+    def test_origin_null_from_another_site_is_still_refused(self) -> None:
+        for headers in (
+            {"Origin": "null", "Sec-Fetch-Site": "cross-site"},
+            {"Origin": "null", "Sec-Fetch-Site": "same-site"},
+            {"Origin": "https://evil.test", "Sec-Fetch-Site": "none"},
+        ):
+            with self.subTest(headers=headers):
+                self.assertEqual(self.unlock("0000", headers=headers)[0].status, 403)
+        self.assertEqual(self.gate.lockouts.store.snapshot()["sites"], {})
+
+    def test_change_pin_accepts_origin_null_too(self) -> None:
+        response, _ = self.request(
+            "POST",
+            "/_pin/change",
+            body="current=4821&new=7305&confirm=7305",
+            headers={"Origin": "null", "Sec-Fetch-Site": "same-origin"},
+        )
+        self.assertEqual(response.status, 303)
+
     def test_same_origin_unlock_is_allowed(self) -> None:
         response, _ = self.unlock("4821", headers={"Origin": "https://app.test", "Sec-Fetch-Site": "same-origin"})
         self.assertEqual(response.status, 303)
