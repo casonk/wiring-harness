@@ -141,3 +141,6 @@ Tracked durable lessons for `wiring-harness`.
   regardless of who owns `~/.config/wiring-harness/certs`; agents cannot sudo,
   so this step is always a command handed back to the user, never one an
   agent can complete itself.
+- A Caddy `forward_auth` placed inside a `handle` block runs before the nested `handle` routes only because the
+  adapter emits it first; after changing how a gated site block is nested, confirm the order with
+  `caddy adapt --config <file>` rather than trusting the directive-order table.
