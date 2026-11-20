@@ -24,6 +24,8 @@ KEY_ENTRY = "portfolio/pin-signing-key"
 class FakeSecrets:
     def __init__(self, values: dict[str, str] | None = None) -> None:
         self.values = {**PINS, KEY_ENTRY: KEY, **(values or {})}
+        self.write_fails = False
+        self.write_is_lost = False
 
     def get(self, entry: str) -> str:
         try:
@@ -31,10 +33,20 @@ class FakeSecrets:
         except KeyError:
             raise pin_gate.SecretError(f"no secret {entry}") from None
 
+    def set(self, entry: str, value: str) -> None:
+        if self.write_fails:
+            raise pin_gate.SecretError("auto-pass refused")
+        if not self.write_is_lost:
+            self.values[entry] = value
+
 
 class FakeNotifier:
     def __init__(self) -> None:
         self.events: list[pin_gate.Newly] = []
+        self.announcements: list[tuple[str, str]] = []
+
+    def announce(self, subject: str, body: str) -> None:
+        self.announcements.append((subject, body))
 
     def notify(self, event: pin_gate.Newly) -> None:
         self.events.append(event)
@@ -167,6 +179,73 @@ class LockoutTests(unittest.TestCase):
         self.assertEqual(gate.attempt(gate.sites["docs"], "10.0.0.2", "1357")[0], "ok")
 
 
+class ChangePinTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.clock = Clock()
+        self.secrets = FakeSecrets()
+        self.gate, self.notifier = make_gate(Path(self._tmp.name), self.clock, self.secrets)
+        self.site = self.gate.sites["app"]
+
+    def change(self, current="4821", new="7305", confirm=None, ip="10.0.0.1"):
+        return self.gate.change_pin(self.site, ip, current, new, new if confirm is None else confirm)
+
+    def test_weak_pins(self) -> None:
+        for weak in ("0000", "7777", "1234", "0123", "9876", "3210"):
+            self.assertTrue(pin_gate.weak_pin(weak), weak)
+        for fine in ("7305", "1357", "2468", "1212", "4821"):
+            self.assertFalse(pin_gate.weak_pin(fine), fine)
+
+    def test_change_writes_the_pin_and_announces_it_without_the_value(self) -> None:
+        outcome, _, cookie = self.change()
+        self.assertEqual(outcome, "ok")
+        self.assertEqual(self.secrets.values["portfolio/pin/app"], "7305")
+        self.assertTrue(pin_gate.cookie_valid(cookie, KEY, "app", "7305", self.clock()))
+        subject, body = self.notifier.announcements[0]
+        self.assertIn("app", body)
+        self.assertNotIn("7305", subject + body)
+        self.assertNotIn("4821", subject + body)
+
+    def test_existing_cookies_stop_working_after_a_change(self) -> None:
+        old = pin_gate.make_cookie_value(KEY, "app", "4821", int(self.clock()) + 100)
+        self.change()
+        self.assertFalse(self.gate.has_valid_cookie(self.site, f"__Host-pin={old}"))
+
+    def test_the_new_pin_then_unlocks_and_the_old_one_does_not(self) -> None:
+        self.change()
+        self.assertEqual(self.gate.attempt(self.site, "10.0.0.2", "4821")[0], "wrong")
+        self.assertEqual(self.gate.attempt(self.site, "10.0.0.2", "7305")[0], "ok")
+
+    def test_wrong_current_pin_counts_toward_the_lockouts_and_writes_nothing(self) -> None:
+        for _ in range(3):
+            self.assertIn(self.change(current="0000")[0], {"wrong", "locked"})
+        self.assertEqual(self.secrets.values["portfolio/pin/app"], "4821")
+        self.assertEqual(self.change()[0], "locked")  # the right PIN is refused while locked
+        self.assertEqual([(e.kind, e.key) for e in self.notifier.events], [("site", "app")])
+
+    def test_rejected_new_pins_write_nothing_and_are_not_counted_as_guesses(self) -> None:
+        cases = [({"new": "0000"}, "weak"), ({"new": "4821"}, "same"), ({"new": "7305", "confirm": "7306"}, "mismatch")]
+        cases += [({"new": "73"}, "mismatch"), ({"new": "abcd"}, "mismatch")]
+        for kwargs, expected in cases:
+            with self.subTest(kwargs=kwargs):
+                self.assertEqual(self.change(**kwargs)[0], expected)
+        self.assertEqual(self.secrets.values["portfolio/pin/app"], "4821")
+        self.assertEqual(self.notifier.announcements, [])
+        self.assertEqual(self.gate.lockouts.store.snapshot()["ips"], {})
+
+    def test_a_failed_write_leaves_the_pin_unchanged(self) -> None:
+        self.secrets.write_fails = True
+        self.assertEqual(self.change()[0], "unavailable")
+        self.assertEqual(self.secrets.values["portfolio/pin/app"], "4821")
+        self.assertEqual(self.notifier.announcements, [])
+
+    def test_a_write_that_does_not_read_back_is_reported_not_trusted(self) -> None:
+        self.secrets.write_is_lost = True
+        self.assertEqual(self.change()[0], "unavailable")
+        self.assertEqual(self.notifier.announcements, [])
+
+
 class AutoPassSecretsTests(unittest.TestCase):
     def test_reads_through_the_daemon_from_the_named_vault_and_caches(self) -> None:
         calls = []
@@ -180,6 +259,29 @@ class AutoPassSecretsTests(unittest.TestCase):
             self.assertEqual(secrets.get("portfolio/pin/app"), "4821")
             self.assertEqual(secrets.get("portfolio/pin/app"), "4821")
         self.assertEqual(calls, [["auto-pass", "provision-get", "--db", "master", "portfolio/pin/app"]])
+
+    def test_set_goes_through_the_daemon_client_and_drops_the_cached_value(self) -> None:
+        client = mock.MagicMock()
+        module = mock.MagicMock(ProvisioningClient=mock.MagicMock(return_value=client))
+        module.ProvisioningClientError = RuntimeError
+        secrets = pin_gate.AutoPassSecrets(vault="master")
+        secrets._cache["portfolio/pin/app"] = (0.0, "old")
+        with mock.patch.dict(sys.modules, {"auto_pass": mock.MagicMock(), "auto_pass.client": module}):
+            secrets.set("portfolio/pin/app", "7305")
+        client.set.assert_called_once_with("portfolio/pin/app", "7305", db="master")
+        self.assertNotIn("portfolio/pin/app", secrets._cache)
+
+    def test_set_failure_is_a_secret_error_that_does_not_carry_the_value(self) -> None:
+        client = mock.MagicMock()
+        client.set.side_effect = RuntimeError("not permitted to write")
+        module = mock.MagicMock(ProvisioningClient=mock.MagicMock(return_value=client))
+        module.ProvisioningClientError = RuntimeError
+        with (
+            mock.patch.dict(sys.modules, {"auto_pass": mock.MagicMock(), "auto_pass.client": module}),
+            self.assertRaises(pin_gate.SecretError) as caught,
+        ):
+            pin_gate.AutoPassSecrets().set("portfolio/pin/app", "7305")
+        self.assertNotIn("7305", str(caught.exception))
 
     def test_a_refused_read_fails_closed(self) -> None:
         refused = subprocess.CompletedProcess([], 1, stdout="", stderr="not permitted")
@@ -329,6 +431,54 @@ class ServerTests(unittest.TestCase):
         cookie = self.unlock("4821")[0].getheader("Set-Cookie").split(";")[0]
         self.secrets.values["portfolio/pin/app"] = "9999"
         self.assertEqual(self.request("GET", "/_pin/verify", headers={"Cookie": cookie})[0].status, 303)
+
+    def test_change_page_and_flow_over_http(self) -> None:
+        response, body = self.request("GET", "/_pin/change?next=/dash")
+        self.assertEqual(response.status, 200)
+        self.assertIn("Current PIN", body)
+        self.assertIn('value="/dash"', body)
+        form = "current=4821&new=7305&confirm=7305&next=/dash"
+        response, _ = self.request("POST", "/_pin/change", body=form)
+        self.assertEqual(response.status, 303)
+        self.assertEqual(response.getheader("Location"), "/dash")
+        cookie = response.getheader("Set-Cookie").split(";")[0]
+        self.assertEqual(self.secrets.values["portfolio/pin/app"], "7305")
+        self.assertEqual(self.request("GET", "/_pin/verify", headers={"Cookie": cookie})[0].status, 204)
+
+    def test_change_errors_use_distinct_statuses_and_never_echo_pins(self) -> None:
+        for form, status in (
+            ("current=0000&new=7305&confirm=7305", 401),
+            ("current=4821&new=0000&confirm=0000", 422),
+            ("current=4821&new=7305&confirm=7306", 422),
+        ):
+            with self.subTest(form=form):
+                response, body = self.request("POST", "/_pin/change", body=form, ip="10.0.9.9")
+                self.assertEqual(response.status, status)
+                for secret in ("4821", "7305", "7306"):
+                    self.assertNotIn(secret, body)
+
+    def test_change_is_locked_out_like_unlocking(self) -> None:
+        for _ in range(3):
+            self.request("POST", "/_pin/change", body="current=0000&new=7305&confirm=7305")
+        response, _ = self.request("POST", "/_pin/change", body="current=4821&new=7305&confirm=7305", ip="10.0.0.9")
+        self.assertEqual(response.status, 429)
+        self.assertEqual(self.secrets.values["portfolio/pin/app"], "4821")
+
+    def test_change_refuses_cross_origin_posts(self) -> None:
+        response, _ = self.request(
+            "POST", "/_pin/change", body="current=4821&new=7305&confirm=7305", headers={"Sec-Fetch-Site": "cross-site"}
+        )
+        self.assertEqual(response.status, 403)
+        self.assertEqual(self.secrets.values["portfolio/pin/app"], "4821")
+
+    def test_a_failed_write_is_503_and_leaves_the_pin(self) -> None:
+        self.secrets.write_fails = True
+        response, _ = self.request("POST", "/_pin/change", body="current=4821&new=7305&confirm=7305")
+        self.assertEqual(response.status, 503)
+        self.assertEqual(self.secrets.values["portfolio/pin/app"], "4821")
+
+    def test_the_keypad_links_to_the_change_page(self) -> None:
+        self.assertIn("/_pin/change", self.request("GET", "/_pin/unlock")[1])
 
     def test_state_file_holds_counts_only_never_guesses(self) -> None:
         self.unlock("0007")

@@ -47,8 +47,37 @@ They are read from the `master` vault (`WH_PIN_VAULT` overrides) through the aut
 (`auto-pass provision-get --db master`), so the daemon must be unlocked and auto-pass's local allowlist needs a
 `[repos.wiring-harness.vaults.master]` block whose `allowed_paths` are `portfolio/pin/*` and
 `portfolio/pin-signing-key`. Values are cached in memory for 10 minutes; restart
-the service after changing one for it to take effect at once. Create the entries with `auto-pass set`
-(see `auto-pass set --help`); do not paste a PIN into a shell argument.
+the service after changing one for it to take effect at once. Create the entries once with `auto-pass set`
+(see `auto-pass set --help`); do not paste a PIN into a shell argument. After that, PINs change from the keypad's
+Change PIN page.
+
+## Changing a PIN
+
+Every keypad has a **Change PIN** link to `/_pin/change` on the same site. It asks for the current PIN, the
+new PIN and the new PIN again.
+
+- The current PIN is checked first and counts toward the same site and IP lockouts as unlocking, so the form
+  cannot be used to guess it.
+- The new PIN must be four digits, entered identically twice, different from the current one, and not trivially
+  guessable (repeated digits such as `0000`, or a straight run such as `1234` or `8765`). Rejected values write
+  nothing and do not count as wrong guesses.
+- The write goes to auto-pass through the daemon's scoped `set` operation, which only replaces the password of an
+  entry that already exists. The gate reads the value back and reports a failure rather than trusting the write.
+  On any failure the PIN is unchanged and the page says so.
+- Cookies are tied to the PIN, so a successful change signs every other device out of that site; the browser that
+  made the change gets a fresh cookie and stays unlocked.
+- A change is announced through shock-relay on every channel. The message names the site and address, never a PIN.
+
+This needs write access that `portfolio/pin/*` read access does not give. In auto-pass's local allowlist:
+
+```toml
+[repos.wiring-harness.vaults.master]
+allowed_paths  = ["portfolio/pin/*", "portfolio/pin-signing-key"]
+writable_paths = ["portfolio/pin/*"]      # the signing key stays read-only
+```
+
+then restart and unlock the daemon so it loads the `set` operation. Without `writable_paths` the page still opens
+but a change fails with "unchanged".
 
 ## Lockouts
 
