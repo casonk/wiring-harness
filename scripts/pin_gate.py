@@ -425,6 +425,23 @@ def safe_next(value: str | None) -> str:
     return value
 
 
+def same_origin_post(headers) -> bool:
+    """Whether a POST came from this site's own pages.
+
+    The sites send ``Referrer-Policy: no-referrer``, and browsers then put ``Origin: null`` on even
+    same-origin form posts, so ``null`` must not be treated as foreign. ``Sec-Fetch-Site`` is the
+    reliable signal where present (browsers set it, pages cannot forge it): only ``same-origin`` passes.
+    Without it, a named Origin must match the Host.
+    """
+    fetch_site = headers.get("Sec-Fetch-Site")
+    if fetch_site:
+        return fetch_site == "same-origin"
+    origin = headers.get("Origin")
+    if not origin or origin == "null":
+        return True
+    return origin.split("://", 1)[-1] == headers.get("Host", "")
+
+
 def client_ip(headers) -> str:
     # Caddy replaces X-Forwarded-For for untrusted clients and this service binds loopback only,
     # so the last hop is the address Caddy actually saw.
@@ -713,9 +730,7 @@ def make_handler(gate: Gate):
                 return
             if path not in (UNLOCK_PATH, CHANGE_PATH):
                 return self._send(HTTPStatus.NOT_FOUND, b"not found")
-            origin = self.headers.get("Origin")
-            host = self.headers.get("Host", "")
-            if self.headers.get("Sec-Fetch-Site") == "cross-site" or (origin and origin.split("://", 1)[-1] != host):
+            if not same_origin_post(self.headers):
                 LOG.warning("cross-origin unlock attempt on %s refused", site.name)
                 return self._send(HTTPStatus.FORBIDDEN, b"cross-origin request refused")
             try:
