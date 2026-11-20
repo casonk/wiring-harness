@@ -60,7 +60,10 @@ class Clock:
         return self.now
 
 
-def make_gate(tmp: Path, clock: Clock, secrets=None, policy=None):
+DAY = 86400
+
+
+def make_gate(tmp: Path, clock: Clock, secrets=None, policy=None, rotation=None):
     sites = {
         "app": pin_gate.SiteConfig("app", "portfolio/pin/app", 12 * 3600),
         "docs": pin_gate.SiteConfig("docs", "portfolio/pin/docs", 3600),
@@ -71,7 +74,8 @@ def make_gate(tmp: Path, clock: Clock, secrets=None, policy=None):
         clock=clock,
     )
     notifier = FakeNotifier()
-    gate = pin_gate.Gate(sites, secrets or FakeSecrets(), lockouts, notifier, clock=clock)
+    rotation = pin_gate.Rotation(lockouts.store, rotation or pin_gate.RotationPolicy(), clock=clock)
+    gate = pin_gate.Gate(sites, secrets or FakeSecrets(), lockouts, notifier, clock=clock, rotation=rotation)
     return gate, notifier
 
 
@@ -225,7 +229,7 @@ class ChangePinTests(unittest.TestCase):
         self.assertEqual([(e.kind, e.key) for e in self.notifier.events], [("site", "app")])
 
     def test_rejected_new_pins_write_nothing_and_are_not_counted_as_guesses(self) -> None:
-        cases = [({"new": "0000"}, "weak"), ({"new": "4821"}, "same"), ({"new": "7305", "confirm": "7306"}, "mismatch")]
+        cases = [({"new": "0000"}, "weak"), ({"new": "7305", "confirm": "7306"}, "mismatch")]
         cases += [({"new": "73"}, "mismatch"), ({"new": "abcd"}, "mismatch")]
         for kwargs, expected in cases:
             with self.subTest(kwargs=kwargs):
@@ -244,6 +248,201 @@ class ChangePinTests(unittest.TestCase):
         self.secrets.write_is_lost = True
         self.assertEqual(self.change()[0], "unavailable")
         self.assertEqual(self.notifier.announcements, [])
+
+
+class RotationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp = Path(self._tmp.name)
+        self.clock = Clock()
+        self.secrets = FakeSecrets()
+        self.gate, self.notifier = make_gate(self.tmp, self.clock, self.secrets)
+        self.site = self.gate.sites["app"]
+        self.rotation = self.gate.rotation
+        self.rotation.ensure(["app", "docs"])  # what `serve` does at start: the clock begins here
+
+    def age(self, days: float) -> None:
+        self.clock.now += days * DAY
+
+    def test_policy_defaults_and_environment(self) -> None:
+        defaults = pin_gate.RotationPolicy()
+        self.assertEqual((defaults.max_age_days, defaults.warn_days, defaults.allow_reuse), (180, 30, True))
+        env = {"WH_PIN_ROTATE_DAYS": "90", "WH_PIN_WARN_DAYS": "10", "WH_PIN_ALLOW_REUSE": "no"}
+        policy = pin_gate.RotationPolicy.from_env(env)
+        self.assertEqual((policy.max_age_days, policy.warn_days, policy.allow_reuse), (90, 10, False))
+
+    def test_a_pin_is_ok_then_warns_for_its_last_month_then_expires(self) -> None:
+        self.assertEqual(self.rotation.status("app"), ("ok", 180))
+        self.age(149)
+        self.assertEqual(self.rotation.status("app")[0], "ok")
+        self.age(1)
+        self.assertEqual(self.rotation.status("app"), ("warn", 30))
+        self.age(29)
+        self.assertEqual(self.rotation.status("app"), ("warn", 1))
+        self.age(1)
+        self.assertEqual(self.rotation.status("app")[0], "overdue")
+
+    def test_rotation_can_be_switched_off(self) -> None:
+        gate, _ = make_gate(self.tmp / "off", Clock(), rotation=pin_gate.RotationPolicy(max_age_days=0))
+        gate.clock.now += 10_000 * DAY
+        self.assertEqual(gate.rotation.status("app")[0], "ok")
+
+    def test_the_clock_survives_a_restart_and_a_change_restarts_it(self) -> None:
+        self.age(100)
+        again, _ = make_gate(self.tmp, self.clock)
+        self.assertEqual(again.rotation.status("app"), ("ok", 80))
+        again.rotation.record_change("app")
+        self.assertEqual(again.rotation.status("app"), ("ok", 180))
+
+    def test_lockout_reset_does_not_forget_pin_ages(self) -> None:
+        self.age(160)
+        self.rotation.status("app")
+        self.gate.lockouts.store.reset(everything=True)
+        self.assertEqual(self.rotation.status("app")[0], "warn")
+
+    def test_notices_are_sent_once_per_phase_and_again_after_a_change(self) -> None:
+        self.rotation.ensure(["app", "docs"])
+        self.assertEqual(self.gate.send_rotation_notices(), 0)
+        self.age(151)
+        self.assertEqual(self.gate.send_rotation_notices(), 2)
+        self.assertEqual(self.gate.send_rotation_notices(), 0)
+        self.age(30)
+        self.assertEqual(self.gate.send_rotation_notices(), 2)  # overdue is a separate notice
+        self.assertEqual(self.gate.send_rotation_notices(), 0)
+        subjects = [subject for subject, _ in self.notifier.announcements]
+        self.assertEqual(subjects.count("wiring-harness: PIN due for rotation"), 2)
+        self.assertEqual(subjects.count("wiring-harness: PIN expired"), 2)
+        self.rotation.record_change("app")
+        self.age(151)
+        self.assertEqual(self.gate.send_rotation_notices(), 1)  # app again; docs already past warn+overdue
+
+    def test_notices_never_contain_a_pin(self) -> None:
+        self.age(151)
+        self.gate.send_rotation_notices()
+        text = " ".join(f"{a} {b}" for a, b in self.notifier.announcements)
+        self.assertNotIn("4821", text)
+        self.assertIn("29 days", text)
+
+    def test_an_overdue_pin_does_not_unlock_but_the_wrong_pin_still_counts(self) -> None:
+        self.age(181)
+        self.assertEqual(self.gate.attempt(self.site, "10.0.0.1", "4821"), ("expired", 0, None))
+        self.assertEqual(self.gate.attempt(self.site, "10.0.0.1", "0000")[0], "wrong")
+
+    def test_overdue_ends_existing_sessions(self) -> None:
+        cookie = self.gate.attempt(self.site, "10.0.0.1", "4821")[2]
+        self.assertTrue(self.gate.has_valid_cookie(self.site, f"__Host-pin={cookie}"))
+        self.age(181)
+        self.assertFalse(self.gate.has_valid_cookie(self.site, f"__Host-pin={cookie}"))
+
+    def test_changing_an_expired_pin_restores_access(self) -> None:
+        self.age(181)
+        outcome, _, cookie = self.gate.change_pin(self.site, "10.0.0.1", "4821", "7305", "7305")
+        self.assertEqual(outcome, "ok")
+        self.assertEqual(self.rotation.status("app")[0], "ok")
+        self.assertTrue(self.gate.has_valid_cookie(self.site, f"__Host-pin={cookie}"))
+
+    def test_other_sites_are_unaffected_by_one_sites_expiry(self) -> None:
+        self.rotation.record_change("docs")
+        self.age(181)
+        self.rotation.record_change("docs")
+        self.assertEqual(self.gate.attempt(self.gate.sites["docs"], "10.0.0.1", "1357")[0], "ok")
+        self.assertEqual(self.gate.attempt(self.site, "10.0.0.1", "4821")[0], "expired")
+
+    def test_reusing_the_current_pin_is_allowed_for_now_and_restarts_the_clock_without_a_write(self) -> None:
+        self.age(181)
+        writes = []
+        original = self.secrets.set
+        self.secrets.set = lambda entry, value: (writes.append(entry), original(entry, value))
+        outcome, _, cookie = self.gate.change_pin(self.site, "10.0.0.1", "4821", "4821", "4821")
+        self.assertEqual(outcome, "ok")
+        self.assertEqual(writes, [])
+        self.assertEqual(self.rotation.status("app"), ("ok", 180))
+        self.assertTrue(self.gate.has_valid_cookie(self.site, f"__Host-pin={cookie}"))
+
+    def test_reuse_is_refused_when_the_policy_forbids_it(self) -> None:
+        gate, _ = make_gate(
+            self.tmp / "strict", Clock(), self.secrets, rotation=pin_gate.RotationPolicy(allow_reuse=False)
+        )
+        self.assertEqual(gate.change_pin(gate.sites["app"], "10.0.0.1", "4821", "4821", "4821")[0], "same")
+        self.assertEqual(self.secrets.values["portfolio/pin/app"], "4821")
+
+    def test_a_weak_pin_is_refused_even_when_it_is_the_current_one(self) -> None:
+        self.secrets.values["portfolio/pin/app"] = "0000"
+        self.assertEqual(self.gate.change_pin(self.site, "10.0.0.1", "0000", "0000", "0000")[0], "weak")
+
+
+class RotationHttpTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.clock = Clock()
+        self.secrets = FakeSecrets()
+        self.gate, self.notifier = make_gate(Path(self._tmp.name), self.clock, self.secrets)
+        self.gate.rotation.ensure(["app", "docs"])
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), pin_gate.make_handler(self.gate))
+        threading.Thread(target=self.server.serve_forever, args=(0.01,), daemon=True).start()
+        self.addCleanup(self.server.server_close)
+        self.addCleanup(self.server.shutdown)
+        self.port = self.server.server_address[1]
+
+    def request(self, method, path, *, body="", headers=None):
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        send = {"X-Pin-Site": "app", "X-Forwarded-For": "10.0.0.1", "Host": "app.test"}
+        if body:
+            send["Content-Type"] = "application/x-www-form-urlencoded"
+        send.update(headers or {})
+        conn.request(method, path, body=body or None, headers=send)
+        response = conn.getresponse()
+        data = response.read().decode()
+        conn.close()
+        return response, data
+
+    def age(self, days: float) -> None:
+        self.clock.now += days * DAY
+
+    def test_unlocking_in_the_warning_window_shows_the_notice_then_the_site(self) -> None:
+        self.age(160)
+        response, _ = self.request("POST", "/_pin/unlock", body="pin=4821&next=/dash")
+        self.assertEqual(response.status, 303)
+        self.assertTrue(response.getheader("Location").startswith("/_pin/notice?next=/dash"))
+        self.assertIn("__Host-pin=", response.getheader("Set-Cookie"))
+        cookie = response.getheader("Set-Cookie").split(";")[0]
+        page, body = self.request("GET", "/_pin/notice?next=/dash", headers={"Cookie": cookie})
+        self.assertEqual(page.status, 200)
+        self.assertIn("within 20 days", body)
+        self.assertIn("/_pin/change?next=/dash", body)
+        self.assertIn('href="/dash"', body)  # remind me later
+        self.assertEqual(self.request("GET", "/_pin/verify", headers={"Cookie": cookie})[0].status, 204)
+
+    def test_no_notice_outside_the_window_and_the_notice_needs_an_unlocked_session(self) -> None:
+        response, _ = self.request("POST", "/_pin/unlock", body="pin=4821&next=/dash")
+        self.assertEqual(response.getheader("Location"), "/dash")
+        anonymous, _ = self.request("GET", "/_pin/notice?next=/dash")
+        self.assertEqual(anonymous.status, 303)
+        self.assertTrue(anonymous.getheader("Location").startswith("/_pin/unlock"))
+        cookie = response.getheader("Set-Cookie").split(";")[0]
+        later, _ = self.request("GET", "/_pin/notice?next=/dash", headers={"Cookie": cookie})
+        self.assertEqual((later.status, later.getheader("Location")), (303, "/dash"))
+
+    def test_an_expired_pin_sends_the_user_to_the_change_page_without_a_cookie(self) -> None:
+        self.age(181)
+        response, _ = self.request("POST", "/_pin/unlock", body="pin=4821&next=/dash")
+        self.assertEqual(response.status, 303)
+        self.assertEqual(response.getheader("Location"), "/_pin/change?reason=expired&next=/dash")
+        self.assertIsNone(response.getheader("Set-Cookie"))
+        page, body = self.request("GET", "/_pin/change?reason=expired&next=/dash")
+        self.assertIn("has expired", body)
+
+    def test_full_expiry_cycle_over_http(self) -> None:
+        cookie = self.request("POST", "/_pin/unlock", body="pin=4821&next=/")[0].getheader("Set-Cookie").split(";")[0]
+        self.age(181)
+        self.assertEqual(self.request("GET", "/_pin/verify", headers={"Cookie": cookie})[0].status, 303)
+        changed, _ = self.request("POST", "/_pin/change", body="current=4821&new=7305&confirm=7305&next=/")
+        self.assertEqual(changed.status, 303)
+        fresh = changed.getheader("Set-Cookie").split(";")[0]
+        self.assertEqual(self.request("GET", "/_pin/verify", headers={"Cookie": fresh})[0].status, 204)
+        self.assertEqual(self.request("GET", "/_pin/verify", headers={"Cookie": cookie})[0].status, 303)
 
 
 class AutoPassSecretsTests(unittest.TestCase):
