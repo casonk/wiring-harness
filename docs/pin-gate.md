@@ -43,8 +43,10 @@ Nothing secret is in this repository. Each site has its own PIN, and one signing
 | `portfolio/pin/<site>` (or `pin_entry`) | the 4-digit PIN for that site |
 | `portfolio/pin-signing-key` (`WH_PIN_SIGNING_KEY_ENTRY`) | a long random string; changing it signs everyone out of every site |
 
-They are read through the auto-pass provisioning daemon (`auto-pass provision-get`), so the entries must be
-approved for this repository and the daemon unlocked. Values are cached in memory for 10 minutes; restart
+They are read from the `master` vault (`WH_PIN_VAULT` overrides) through the auto-pass provisioning daemon
+(`auto-pass provision-get --db master`), so the daemon must be unlocked and auto-pass's local allowlist needs a
+`[repos.wiring-harness.vaults.master]` block whose `allowed_paths` are `portfolio/pin/*` and
+`portfolio/pin-signing-key`. Values are cached in memory for 10 minutes; restart
 the service after changing one for it to take effect at once. Create the entries with `auto-pass set`
 (see `auto-pass set --help`); do not paste a PIN into a shell argument.
 

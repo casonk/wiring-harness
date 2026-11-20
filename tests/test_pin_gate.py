@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import http.client
 import json
+import subprocess
 import sys
 import tempfile
 import threading
 import unittest
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
@@ -163,6 +165,27 @@ class LockoutTests(unittest.TestCase):
         gate, _ = make_gate(self.tmp, self.clock)
         self.assertEqual(gate.attempt(gate.sites["app"], "10.0.0.1", "1357")[0], "wrong")
         self.assertEqual(gate.attempt(gate.sites["docs"], "10.0.0.2", "1357")[0], "ok")
+
+
+class AutoPassSecretsTests(unittest.TestCase):
+    def test_reads_through_the_daemon_from_the_named_vault_and_caches(self) -> None:
+        calls = []
+
+        def fake_run(command, **kwargs):
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 0, stdout="4821\n", stderr="")
+
+        secrets = pin_gate.AutoPassSecrets(vault="master")
+        with mock.patch.object(pin_gate.subprocess, "run", fake_run):
+            self.assertEqual(secrets.get("portfolio/pin/app"), "4821")
+            self.assertEqual(secrets.get("portfolio/pin/app"), "4821")
+        self.assertEqual(calls, [["auto-pass", "provision-get", "--db", "master", "portfolio/pin/app"]])
+
+    def test_a_refused_read_fails_closed(self) -> None:
+        refused = subprocess.CompletedProcess([], 1, stdout="", stderr="not permitted")
+        with mock.patch.object(pin_gate.subprocess, "run", return_value=refused):
+            with self.assertRaises(pin_gate.SecretError):
+                pin_gate.AutoPassSecrets().get("portfolio/pin/app")
 
 
 class HelperTests(unittest.TestCase):
