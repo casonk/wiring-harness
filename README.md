@@ -188,6 +188,9 @@ repository) and writes a registry-only `nav.json` that Clockwork replaces when i
 | `url_scheme` | Optional inventory URL scheme for non-HTTPS direct services, for example `rdp` |
 | `client_ca_path` | Override client CA; omit to use the shared wiring-harness CA |
 | `proxy_headers` | Extra headers injected by Caddy into the upstream request |
+| `pin` | `true` puts the site behind a per-site 4-digit PIN (shared-Caddy ingress only); see [docs/pin-gate.md](docs/pin-gate.md) |
+| `pin_ttl_hours` | Optional unlock duration for `pin` sites; defaults to 12, at most 168 |
+| `pin_entry` | Optional auto-pass entry for the site's PIN; defaults to `portfolio/pin/<name>` |
 | `dns_enabled` | Optional override; defaults to `true` for VPN DNS publication |
 | `macos_edge_role` | Optional reviewed Air role: required `clockwork`; optional `snowbridge` or `webterm` |
 | `macos_edge_listen_port` | Exact reviewed Air HTTPS port: Clockwork `8443`, Snowbridge `8444`, Webterm `8445` |

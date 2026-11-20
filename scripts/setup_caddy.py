@@ -46,6 +46,7 @@ from site_registry import (
     dns_sites,
     load_sites,
     render_inventory_markdown,
+    validate_pin,
 )
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -75,6 +76,8 @@ CHROME_SNIPPET = (
     "\t}\n"
     "}"
 )
+# Sites with `pin = true` ask the PIN gate (scripts/pin_gate.py, loopback only) before serving.
+PIN_GATE = os.environ.get("WH_PIN_GATE", "127.0.0.1:8768")
 TRACTION_CONTROL_SITES = REPO_ROOT.parent / "traction-control" / "scripts" / "portfolio_sites.py"
 DEFAULT_OUTPUT = REPO_ROOT / "config" / "caddy" / "Caddyfile.combined.local"
 DEFAULT_INVENTORY_OUTPUT = REPO_ROOT / "config" / "private-sites.inventory.local.md"
@@ -260,6 +263,7 @@ def _site_block(
     static_root: str | None = None,
     static_index: str = "index.html",
     chrome_root: str | None = None,
+    pin_site: str | None = None,
 ) -> str:
     header_lines = "\n".join(
         f"\t\theader_up {k} {v}" for k, v in proxy_headers.items()
@@ -288,6 +292,22 @@ def _site_block(
         )
     else:
         handler = f"\treverse_proxy {proxy_target}{proxy_extra}\n"
+    if pin_site is not None:
+        # The unlock pages and the check share one upstream; the site name is set here, never taken
+        # from the client, so a request cannot ask about a site other than the one it reached.
+        indented = "".join(f"\t{line}\n" for line in handler.splitlines())
+        handler = (
+            "\thandle /_pin/* {\n"
+            f"\t\treverse_proxy {PIN_GATE} {{\n"
+            f"\t\t\theader_up X-Pin-Site {pin_site}\n"
+            "\t\t}\n"
+            "\t}\n"
+            "\thandle {\n"
+            f"\t\tforward_auth {PIN_GATE} {{\n"
+            "\t\t\turi /_pin/verify\n"
+            f"\t\t\theader_up X-Pin-Site {pin_site}\n"
+            "\t\t}\n" + indented + "\t}\n"
+        )
     return (
         f"https://{hostname} {{\n"
         f"\ttls {cert} {key} {{\n"
@@ -338,6 +358,7 @@ def generate_caddyfile(
 
     blocks: list[str] = []
     for svc in services:
+        validate_pin(svc)
         hostname = svc["hostname"]
         static_root = _resolve_static_root(svc)
         proxy_target = None if static_root else _resolve_proxy_target(svc, home)
@@ -355,6 +376,7 @@ def generate_caddyfile(
                 static_root=static_root,
                 static_index=_resolve_static_index(svc) if static_root else "index.html",
                 chrome_root=chrome,
+                pin_site=svc["name"] if svc.get("pin") else None,
             )
         )
 
