@@ -37,6 +37,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -172,6 +173,7 @@ class StateStore:
             data.setdefault("sites", {})
             data.setdefault("ips", {})
             data.setdefault("pins", {})
+            data.setdefault("verifiers", {})
             yield data
             temporary = self.path.with_name(self.path.name + ".tmp")
             temporary.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -541,6 +543,69 @@ def client_ip(headers) -> str:
     return last or "unknown"
 
 
+class Seal:
+    """A TPM-sealed key that lets the gate check PINs while the vault is locked.
+
+    systemd unseals the key (a ``LoadCredentialEncrypted`` credential bound to the TPM) for the
+    service only. From it the gate derives a keyed fingerprint of each PIN, ``HMAC(key, site|pin)``,
+    and the cookie-signing key. The fingerprints are kept in the state file: without the sealed
+    key, which never leaves the TPM at rest, ten thousand guesses cannot be tried offline. The
+    vault stays the source of truth and is read only to refresh the fingerprints and to change a PIN.
+    """
+
+    CREDENTIAL = "pin-seal-key"
+
+    def __init__(self, key: bytes, store: StateStore) -> None:
+        self._key = key
+        self.store = store
+
+    @classmethod
+    def from_environment(cls, store: StateStore, environ: dict[str, str] | None = None) -> Seal | None:
+        env = os.environ if environ is None else environ
+        path = env.get("WH_PIN_SEAL_KEY_FILE", "").strip()
+        if not path and env.get("CREDENTIALS_DIRECTORY"):
+            path = str(Path(env["CREDENTIALS_DIRECTORY"]) / cls.CREDENTIAL)
+        if not path:
+            return None
+        try:
+            key = Path(path).read_bytes().strip()
+        except OSError as exc:
+            LOG.warning("sealed key %s unreadable (%s); using the vault for every check", path, exc)
+            return None
+        if len(key) < 16:
+            LOG.warning("sealed key %s is too short; using the vault for every check", path)
+            return None
+        return cls(key, store)
+
+    def compute(self, site: str, pin: str) -> str:
+        return hmac.new(self._key, f"pin-verifier:{site}:{pin}".encode(), hashlib.sha256).hexdigest()
+
+    def cookie_key(self) -> str:
+        return hmac.new(self._key, b"cookie-signing:v1", hashlib.sha256).hexdigest()
+
+    def verifier_for(self, site: str) -> str | None:
+        with self.store.transaction() as data:
+            record = data["verifiers"].get(site)
+        return record.get("v") if isinstance(record, dict) else None
+
+    def remember(self, site: str, pin: str, now: float) -> str | None:
+        """Store this PIN's fingerprint; return the previous one (None if there was none)."""
+        verifier = self.compute(site, pin)
+        with self.store.transaction() as data:
+            previous = (data["verifiers"].get(site) or {}).get("v")
+            data["verifiers"][site] = {"v": verifier, "synced": now}
+        return previous
+
+
+@dataclass(frozen=True)
+class SiteSecret:
+    """What the gate needs to judge a guess and bind a cookie to the current PIN."""
+
+    matches: Callable[[str], bool]
+    binder: str
+    signing_key: str
+
+
 class Gate:
     def __init__(
         self,
@@ -551,7 +616,9 @@ class Gate:
         signing_key_entry: str = SIGNING_KEY_ENTRY,
         clock=time.time,
         rotation: Rotation | None = None,
+        seal: Seal | None = None,
     ) -> None:
+        self.seal = seal
         self.rotation = rotation or Rotation(lockouts.store, RotationPolicy(), clock)
         self.sites = sites
         self.secrets = secrets
@@ -560,48 +627,92 @@ class Gate:
         self.signing_key_entry = signing_key_entry
         self.clock = clock
 
+    def _material(self, site: SiteConfig) -> SiteSecret:
+        """The sealed fingerprint when there is one, else the vault, so a locked vault does not stop the gate."""
+        if self.seal is not None:
+            verifier = self.seal.verifier_for(site.name)
+            if verifier:
+                seal = self.seal
+
+                def sealed_match(guess: str) -> bool:
+                    return bool(PIN_RE.match(guess or "")) and hmac.compare_digest(
+                        seal.compute(site.name, guess), verifier
+                    )
+
+                return SiteSecret(sealed_match, verifier, seal.cookie_key())
+        pin = self.secrets.get(site.entry)
+        key = self.secrets.get(self.signing_key_entry)
+
+        def vault_match(guess: str) -> bool:
+            return bool(PIN_RE.match(guess or "")) and hmac.compare_digest(guess.encode(), pin.encode())
+
+        return SiteSecret(vault_match, pin, key)
+
     def has_valid_cookie(self, site: SiteConfig, cookie_header: str) -> bool:
         value = _cookie(cookie_header, COOKIE_NAME)
         if not value:
             return False
         if self.rotation.status(site.name)[0] == "overdue":
             return False  # an expired PIN ends existing sessions too
-        pin = self.secrets.get(site.entry)
-        key = self.secrets.get(self.signing_key_entry)
-        return cookie_valid(value, key, site.name, pin, self.clock())
+        material = self._material(site)
+        return cookie_valid(value, material.signing_key, site.name, material.binder, self.clock())
 
-    def _check_current(self, site: SiteConfig, ip: str, guess: str) -> tuple[str, int, str, str]:
-        """Check a PIN against the lockouts. Returns (outcome, lock_seconds, pin, signing_key)."""
+    def _check_current(self, site: SiteConfig, ip: str, guess: str) -> tuple[str, int, SiteSecret | None]:
+        """Check a PIN against the lockouts. Returns (outcome, lock_seconds, secret when it matched)."""
         remaining = self.lockouts.locked_for(site.name, ip)
         if remaining:
             LOG.info("refused attempt on %s from %s: locked for %ss", site.name, ip, remaining)
-            return "locked", remaining, "", ""
-        pin = self.secrets.get(site.entry)
-        key = self.secrets.get(self.signing_key_entry)
-        if PIN_RE.match(guess or "") and hmac.compare_digest(guess.encode(), pin.encode()):
+            return "locked", remaining, None
+        material = self._material(site)
+        if material.matches(guess):
             self.lockouts.record_success(site.name)
-            return "ok", 0, pin, key
+            return "ok", 0, material
         for event in self.lockouts.record_failure(site.name, ip):
             LOG.warning(
                 "lockout: %s %s for %ss (attempt on %s from %s)", event.kind, event.key, event.seconds, site.name, ip
             )
             self.notifier.notify(event)
         LOG.info("wrong PIN on %s from %s", site.name, ip)
-        return "wrong", self.lockouts.locked_for(site.name, ip), "", ""
+        return "wrong", self.lockouts.locked_for(site.name, ip), None
 
-    def _new_cookie(self, site: SiteConfig, pin: str, key: str) -> str:
-        return make_cookie_value(key, site.name, pin, int(self.clock()) + site.ttl_seconds)
+    def _new_cookie(self, site: SiteConfig, binder: str, key: str) -> str:
+        return make_cookie_value(key, site.name, binder, int(self.clock()) + site.ttl_seconds)
+
+    def sync_sealed(self) -> int:
+        """Refresh the sealed fingerprints from the vault when it is reachable; returns how many changed.
+
+        A fingerprint that differs from one already stored means the PIN was edited in the vault
+        directly, which counts as a change: the rotation clock restarts and old sessions end.
+        """
+        if self.seal is None:
+            return 0
+        changed = 0
+        for site in self.sites.values():
+            try:
+                pin = self.secrets.get(site.entry)
+            except SecretError:
+                continue  # vault locked or entry missing: keep what we have
+            if not PIN_RE.match(pin):
+                LOG.warning("vault PIN for %s is not four digits; not sealing it", site.name)
+                continue
+            previous = self.seal.remember(site.name, pin, self.clock())
+            if previous != self.seal.compute(site.name, pin):
+                changed += 1
+                if previous is not None:
+                    self.rotation.record_change(site.name)
+                    LOG.warning("PIN for %s was changed in the vault; rotation clock restarted", site.name)
+        return changed
 
     def attempt(self, site: SiteConfig, ip: str, guess: str) -> tuple[str, int, str | None]:
         """Returns (outcome, lock_seconds, cookie). Outcome: ok, wrong, or locked."""
-        outcome, seconds, pin, key = self._check_current(site, ip, guess)
-        if outcome != "ok":
+        outcome, seconds, material = self._check_current(site, ip, guess)
+        if material is None:
             return outcome, seconds, None
         if self.rotation.status(site.name)[0] == "overdue":
             LOG.info("correct PIN for %s from %s but it has expired; change required", site.name, ip)
             return "expired", 0, None
         LOG.info("unlocked %s for %s", site.name, ip)
-        return "ok", 0, self._new_cookie(site, pin, key)
+        return "ok", 0, self._new_cookie(site, material.binder, material.signing_key)
 
     def change_pin(
         self, site: SiteConfig, ip: str, current: str, new: str, confirm: str
@@ -613,21 +724,21 @@ class Gate:
         passes is written. Cookies are tied to the PIN, so every other device is signed out; the
         caller gets a fresh cookie so this one stays unlocked.
         """
-        outcome, seconds, pin, key = self._check_current(site, ip, current)
-        if outcome != "ok":
+        outcome, seconds, material = self._check_current(site, ip, current)
+        if material is None:
             return outcome, seconds, None
         if not PIN_RE.match(new or "") or new != confirm:
             return "mismatch", 0, None
         if weak_pin(new):
             return "weak", 0, None
-        if new == pin:
+        if material.matches(new):
             if not self.rotation.policy.allow_reuse:
                 return "same", 0, None
             # Reuse is allowed for now: nothing to write, but the rotation clock restarts.
             self.rotation.record_change(site.name)
             LOG.warning("PIN for %s renewed unchanged from %s", site.name, ip)
             self.notifier.announce("wiring-harness: PIN renewed", f"The PIN for {site.name} was renewed from {ip}.")
-            return "ok", 0, self._new_cookie(site, pin, key)
+            return "ok", 0, self._new_cookie(site, material.binder, material.signing_key)
         try:
             self.secrets.set(site.entry, new)
             if self.secrets.get(site.entry) != new:
@@ -636,9 +747,12 @@ class Gate:
             LOG.error("PIN change for %s failed: %s", site.name, exc)
             return "unavailable", 0, None
         self.rotation.record_change(site.name)
+        if self.seal is not None:
+            self.seal.remember(site.name, new, self.clock())
         LOG.warning("PIN for %s changed from %s; other devices are signed out", site.name, ip)
         self.notifier.announce("wiring-harness: PIN changed", f"The PIN for {site.name} was changed from {ip}.")
-        return "ok", 0, self._new_cookie(site, new, key)
+        fresh = self._material(site)
+        return "ok", 0, self._new_cookie(site, fresh.binder, fresh.signing_key)
 
     def send_rotation_notices(self) -> int:
         """Announce each PIN that has entered its warning window or gone overdue, once."""
@@ -948,6 +1062,7 @@ def _watch_rotation(gate: Gate, interval: int = 3600) -> None:
     """Hourly: announce PINs entering their warning window or going overdue."""
     while True:
         try:
+            gate.sync_sealed()
             gate.send_rotation_notices()
         except Exception:  # keep the watcher alive; one failed pass must not end the notices
             LOG.warning("rotation notice pass failed", exc_info=True)
@@ -967,8 +1082,13 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         Notifier.from_env(),
         signing_key_entry=os.environ.get("WH_PIN_SIGNING_KEY_ENTRY", SIGNING_KEY_ENTRY),
         rotation=Rotation(store, RotationPolicy.from_env()),
+        seal=Seal.from_environment(store),
     )
     gate.rotation.ensure(sites)
+    if gate.seal is None:
+        LOG.warning("no sealed key: every PIN check needs the auto-pass vault unlocked")
+    else:
+        LOG.info("sealed key loaded; refreshed %d fingerprint(s) from the vault", gate.sync_sealed())
     threading.Thread(target=_watch_rotation, args=(gate,), daemon=True).start()
     server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(gate))
     LOG.info("PIN gate on 127.0.0.1:%d for %s", args.port, ", ".join(sorted(sites)))
@@ -997,6 +1117,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
                 )
     if not rows:
         print("no active lockouts or failure counts")
+    print(f"sealed fingerprints stored: {len(snapshot.get('verifiers', {}))}")
     rotation = Rotation(StateStore(default_state_file()), RotationPolicy.from_env())
     for name in sorted(snapshot.get("pins", {})):
         state, days = rotation.status(name)

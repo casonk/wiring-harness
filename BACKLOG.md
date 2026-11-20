@@ -10,6 +10,11 @@ Mark items `[x]` when complete and move them to Done.
 
 ## Pending
 
+- [ ] [manual:2026-11-20] **Move the PIN gate to the sealed-key system unit** — owner steps (need `sudo`):
+  `sudo bash scripts/seal_pin_key.sh`, install `config/systemd/wiring-harness-pin-gate.system.service.example`
+  as `/etc/systemd/system/wiring-harness-pin-gate.service`, disable the user unit, then reboot once to
+  prove sites still take their PIN with auto-pass locked. Done when that reboot test passes. See
+  `docs/pin-gate.md` ("Surviving a reboot").
 - [ ] [manual:2026-11-20] **Change the 16 default PINs** — every `pin = true` site still
   uses the placeholder `0000`. Open each site, use **Change PIN** on its keypad, and
   pick a PIN that `pin_gate.py` accepts (no repeats or runs). Needs the auto-pass daemon

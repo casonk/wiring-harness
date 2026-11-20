@@ -4,6 +4,11 @@ All notable changes to `wiring-harness` are documented here.
 
 ## Unreleased
 
+- Add a TPM-sealed key so the PIN gate keeps checking PINs after a reboot with the auto-pass vault still locked.
+  `scripts/seal_pin_key.sh` seals 32 random bytes to the TPM (systemd-creds, PCR 7); the gate, run as a system unit with
+  `LoadCredentialEncrypted=`, keeps `HMAC(key, site|pin)` fingerprints and derives the cookie key from it, refreshing the
+  fingerprints whenever the vault is reachable. Changing a PIN still needs the vault; without a key the gate behaves as
+  before. See `docs/pin-gate.md`.
 - Add PIN rotation: PINs expire 180 days after their last change (`WH_PIN_ROTATE_DAYS`). The last 30 days show a notice
   after unlocking and send one shock-relay alert; past the limit the old PIN only leads to the change page, existing
   sessions end, and a second alert is sent. Reusing the current PIN is allowed for now (`WH_PIN_ALLOW_REUSE`) and
