@@ -4,6 +4,11 @@ All notable changes to `wiring-harness` are documented here.
 
 ## Unreleased
 
+- Fix the PIN gate failing every check as a system unit: its default `PATH` lacks `~/.local/bin`, so it could not run
+  `auto-pass`. The unit template now sets `PATH`, `serve` logs an error at start-up when `auto-pass` is not found, and a
+  test covers the template. The 503 body no longer says "locked: secrets unavailable" for every failure; it names the
+  vault being locked, the command missing, a refused request, or a generic error. Add `--log-file` /
+  `WIRING_HARNESS_LOG_FILE` (rotating, owner-only, default on for macOS and Windows) so diagnosis does not need `journalctl`.
 - Add a TPM-sealed key so the PIN gate keeps checking PINs after a reboot with the auto-pass vault still locked.
   `scripts/seal_pin_key.sh` seals 32 random bytes to the TPM (systemd-creds, PCR 7); the gate, run as a system unit with
   `LoadCredentialEncrypted=`, keeps `HMAC(key, site|pin)` fingerprints and derives the cookie key from it, refreshing the

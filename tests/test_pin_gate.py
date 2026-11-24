@@ -647,6 +647,109 @@ class AutoPassSecretsTests(unittest.TestCase):
             pin_gate.AutoPassSecrets().get("portfolio/pin/app")
 
 
+class SecretFailureReasonTests(unittest.TestCase):
+    def read(self, **run_kwargs):
+        with (
+            mock.patch.object(pin_gate.subprocess, "run", **run_kwargs),
+            self.assertRaises(pin_gate.SecretError) as caught,
+        ):
+            pin_gate.AutoPassSecrets().get("portfolio/pin/app")
+        return caught.exception
+
+    def test_a_missing_binary_is_reported_as_missing_not_locked(self) -> None:
+        error = self.read(side_effect=FileNotFoundError(2, "No such file or directory: 'auto-pass'"))
+        self.assertEqual(error.reason, "missing")
+        self.assertIn("auto-pass", str(error))
+
+    def test_a_locked_daemon_is_reported_as_locked(self) -> None:
+        locked = subprocess.CompletedProcess([], 1, stdout="", stderr="error: daemon is locked")
+        self.assertEqual(self.read(return_value=locked).reason, "locked")
+
+    def test_a_refusal_is_reported_as_denied(self) -> None:
+        refused = subprocess.CompletedProcess([], 1, stdout="", stderr="repo is not permitted")
+        self.assertEqual(self.read(return_value=refused).reason, "denied")
+
+    def test_other_launch_failures_are_a_generic_error(self) -> None:
+        self.assertEqual(self.read(side_effect=PermissionError("denied")).reason, "error")
+
+
+class LoggingTests(unittest.TestCase):
+    def setUp(self) -> None:
+        root = pin_gate.logging.getLogger()
+        self.addCleanup(setattr, root, "handlers", list(root.handlers))
+        self.addCleanup(root.setLevel, root.level)
+        root.handlers = []
+
+    def test_platform_defaults_are_per_user_locations(self) -> None:
+        mac = pin_gate.default_log_path("darwin", {"HOME": "/Users/u"})
+        win = pin_gate.default_log_path("win32", {"USERPROFILE": "C:/Users/u", "LOCALAPPDATA": "C:/L"})
+        linux = pin_gate.default_log_path("linux", {"HOME": "/home/u", "XDG_STATE_HOME": "/s"})
+        self.assertEqual(mac, Path("/Users/u/Library/Logs/wiring-harness/pin-gate.log"))
+        self.assertEqual(win, Path("C:/L/wiring-harness/Logs/pin-gate.log"))
+        self.assertEqual(linux, Path("/s/wiring-harness/pin-gate.log"))
+
+    def test_file_is_on_for_mac_and_windows_and_off_for_linux_by_default(self) -> None:
+        with mock.patch.dict(pin_gate.os.environ, {}, clear=False):
+            pin_gate.os.environ.pop(pin_gate.LOG_FILE_ENV, None)
+            self.assertIsNone(pin_gate.resolve_log_file(None, "linux"))
+            self.assertIsNotNone(pin_gate.resolve_log_file(None, "darwin"))
+            self.assertIsNotNone(pin_gate.resolve_log_file(None, "win32"))
+            self.assertIsNone(pin_gate.resolve_log_file("off", "darwin"))
+            self.assertIsNotNone(pin_gate.resolve_log_file("default", "linux"))
+
+    def test_writes_an_owner_only_file_once_and_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "logs" / "gate.log"
+            pin_gate.configure_logging("INFO", str(path))
+            pin_gate.configure_logging("INFO", str(path))
+            pin_gate.LOG.error("failing closed for app: auto-pass unavailable")
+            for handler in pin_gate.logging.getLogger().handlers:
+                handler.flush()
+            self.assertEqual(path.read_text().count("failing closed"), 1)
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(len(pin_gate.logging.getLogger().handlers), 2)
+            for handler in pin_gate.logging.getLogger().handlers:
+                handler.close()
+
+    def test_an_unwritable_log_file_is_not_fatal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            blocker = Path(tmp) / "file"
+            blocker.write_text("x")
+            pin_gate.configure_logging("INFO", str(blocker / "sub" / "gate.log"))
+        self.assertEqual(len(pin_gate.logging.getLogger().handlers), 1)
+
+    def test_unknown_level_falls_back_to_info(self) -> None:
+        pin_gate.configure_logging("loud", "off")
+        self.assertEqual(pin_gate.logging.getLogger().level, pin_gate.logging.INFO)
+
+
+class SystemUnitTests(unittest.TestCase):
+    """The gate runs as a system unit with a minimal PATH; it must still find `auto-pass`."""
+
+    UNIT = Path(__file__).resolve().parents[1] / "config" / "systemd" / "wiring-harness-pin-gate.system.service.example"
+
+    def test_unit_path_includes_the_user_local_bin_where_auto_pass_installs(self) -> None:
+        lines = [x for x in self.UNIT.read_text().splitlines() if x.startswith("Environment=PATH=")]
+        self.assertEqual(len(lines), 1, "the unit must set PATH explicitly")
+        self.assertIn("<home>/.local/bin", lines[0].split("=", 2)[2].split(":"))
+
+    def test_serve_logs_an_error_when_auto_pass_is_not_on_path(self) -> None:
+        args = pin_gate.build_parser().parse_args(["serve"])
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.object(pin_gate, "sites_from_registry", return_value={"app": mock.MagicMock()}),
+            mock.patch.object(pin_gate, "default_state_file", return_value=Path(tmp) / "state.json"),
+            mock.patch.object(pin_gate.shutil, "which", return_value=None),
+            mock.patch.object(pin_gate, "ThreadingHTTPServer", side_effect=RuntimeError("stop")),
+            mock.patch.object(pin_gate.threading, "Thread"),
+            mock.patch.object(pin_gate.Rotation, "ensure"),
+            self.assertLogs(pin_gate.LOG, "ERROR") as logs,
+            self.assertRaises(RuntimeError),
+        ):
+            pin_gate._cmd_serve(args)
+        self.assertIn("not found on PATH", "\n".join(logs.output))
+
+
 class HelperTests(unittest.TestCase):
     def test_safe_next_rejects_open_redirects(self) -> None:
         for bad in (None, "", "http://evil.test/", "//evil.test", "/\\evil", "/a\r\nSet-Cookie: x=1", "/_pin/unlock?x"):
@@ -810,6 +913,20 @@ class ServerTests(unittest.TestCase):
         del self.secrets.values["portfolio/pin/app"]
         self.assertEqual(self.request("GET", "/_pin/verify", headers={"Cookie": "__Host-pin=app.1.x"})[0].status, 503)
         self.assertEqual(self.unlock("4821")[0].status, 503)
+
+    def test_each_secret_failure_gets_its_own_honest_message(self) -> None:
+        for reason, phrase in (
+            ("locked", b"vault is locked"),
+            ("missing", b"command was not found"),
+            ("denied", b"refused the request"),
+            ("error", b"see the PIN gate log"),
+        ):
+            with self.subTest(reason=reason):
+                self.secrets.get = mock.Mock(side_effect=pin_gate.SecretError("x", reason))
+                response, body = self.request("GET", "/_pin/verify", headers={"Cookie": "__Host-pin=app.1.x"})
+                self.assertEqual(response.status, 503)
+                self.assertIn(phrase, body if isinstance(body, bytes) else body.encode())
+                self.assertEqual(body if isinstance(body, bytes) else body.encode(), pin_gate.UNAVAILABLE_BODIES[reason])
 
     def test_changing_the_pin_revokes_existing_cookies(self) -> None:
         cookie = self.unlock("4821")[0].getheader("Set-Cookie").split(";")[0]

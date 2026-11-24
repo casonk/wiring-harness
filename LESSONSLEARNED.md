@@ -154,3 +154,9 @@ Tracked durable lessons for `wiring-harness`.
 - Under `Referrer-Policy: no-referrer` browsers send `Origin: null` on same-origin form posts, so a CSRF check that
   compares `Origin` to `Host` refuses real users. Prefer `Sec-Fetch-Site: same-origin` and test with the headers a
   browser really sends, not a hand-written matching `Origin`.
+- A system unit does not inherit the user's `PATH`, so a gate that shells out to a user-installed command (`auto-pass`
+  under `~/.local/bin`) fails only after the move from a user unit to a system unit, and its health check on another
+  port still passes. Set `Environment=PATH=` explicitly in the unit, have `serve` log when its required commands do not
+  resolve, and test the template. Give every fail-closed response a distinct, truthful reason: one "locked" message for a
+  missing binary, a refusal and a locked vault sent the diagnosis down the wrong path twice. Diagnostics must not depend
+  on `journalctl`: keep the file-logging option for macOS and Windows.
