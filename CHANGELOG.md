@@ -4,6 +4,8 @@ All notable changes to `wiring-harness` are documented here.
 
 ## Unreleased
 
+- Make `pin_gate.py` importable and runnable on Windows: the state-file lock uses `msvcrt` where `fcntl` does not exist, and the
+  state file defaults to `%LOCALAPPDATA%\wiring-harness\pin-gate.json` there.
 - Fix the PIN gate failing every check as a system unit: its default `PATH` lacks `~/.local/bin`, so it could not run
   `auto-pass`. The unit template now sets `PATH`, `serve` logs an error at start-up when `auto-pass` is not found, and a
   test covers the template. The 503 body no longer says "locked: secrets unavailable" for every failure; it names the

@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import fcntl
 import hashlib
 import hmac
 import html
@@ -49,6 +48,33 @@ from urllib.parse import parse_qs, quote
 from site_registry import DEFAULT_SERVICES_TOML, load_sites
 
 LOG = logging.getLogger("wiring-harness.pin-gate")
+
+try:  # POSIX
+    import fcntl
+except ImportError:  # Windows
+    fcntl = None  # type: ignore[assignment]
+    import msvcrt
+
+
+def _lock_file(fd: int) -> None:
+    """Take an exclusive lock on ``fd``, waiting for it, on POSIX and Windows."""
+    if fcntl is not None:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        return
+    os.lseek(fd, 0, os.SEEK_SET)
+    while True:  # msvcrt.LOCK_LOCK retries ten times then raises; keep waiting like flock does
+        try:
+            msvcrt.locking(fd, msvcrt.LK_LOCK, 1)  # type: ignore[attr-defined]
+            return
+        except OSError:
+            time.sleep(0.05)
+
+
+def _unlock_file(fd: int) -> None:
+    if fcntl is None:
+        with contextlib.suppress(OSError):
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)  # type: ignore[attr-defined]
 
 DEFAULT_PORT = 8781
 DEFAULT_TTL_HOURS = 12.0
@@ -189,6 +215,9 @@ class Policy:
 def default_state_file() -> Path:
     if os.environ.get("WH_PIN_STATE"):
         return Path(os.environ["WH_PIN_STATE"]).expanduser()
+    if sys.platform == "win32":
+        base = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
+        return base / "wiring-harness" / "pin-gate.json"
     base = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state")
     return base / "wiring-harness" / "pin-gate.json"
 
@@ -240,7 +269,7 @@ class StateStore:
         lock_path = self.path.with_name(self.path.name + ".lock")
         fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            _lock_file(fd)
             try:
                 data = json.loads(self.path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
@@ -257,6 +286,7 @@ class StateStore:
             temporary.chmod(0o600)
             os.replace(temporary, self.path)
         finally:
+            _unlock_file(fd)
             os.close(fd)
 
     def snapshot(self) -> dict:
