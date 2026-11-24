@@ -13,6 +13,8 @@ RequiresMountsFor=<path-to>/wiring-harness
 Type=simple
 User=<user>
 Environment=HOME=<home>
+# The gate shells out to `auto-pass`, which pip installs under ~/.local/bin; a system unit's default PATH lacks it.
+Environment=PATH=<home>/.local/bin:/usr/local/bin:/usr/bin:/bin
 WorkingDirectory=<path-to>/wiring-harness
 # systemd unseals this with the TPM and hands it to this service only, as $CREDENTIALS_DIRECTORY/pin-seal-key.
 LoadCredentialEncrypted=pin-seal-key:/etc/credstore.encrypted/wiring-harness-pin-seal-key
