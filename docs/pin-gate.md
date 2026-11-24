@@ -82,6 +82,12 @@ After a firmware update or a Secure Boot change the TPM will refuse the old key 
 gated sites then stay closed). Re-seal with `sudo bash scripts/seal_pin_key.sh --force`, as for ignition's `--rebind`;
 the fingerprints are rebuilt the next time the vault is unlocked, and until then the gate needs the vault again.
 
+Sealing the PIN key makes the keypad available while the vault is locked, but it does not by itself make the Auto Pass
+web backend start: that service normally fetches its own login token from the daemon. Pair this system unit with
+Auto Pass's TPM-sealed web-token system unit. The coordinated, rollback-capable installer lives at
+`../auto-pass/scripts/install_tpm_browser_unlock.sh`; run its `--dry-run` first. It seals only the gate key and web
+login token. The KeePass master password remains interactive and is never stored in either credential.
+
 ## Changing a PIN
 
 Every keypad has a **Change PIN** link to `/_pin/change` on the same site. It asks for the current PIN, the
