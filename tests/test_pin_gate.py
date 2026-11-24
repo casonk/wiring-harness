@@ -750,6 +750,29 @@ class SystemUnitTests(unittest.TestCase):
         self.assertIn("not found on PATH", "\n".join(logs.output))
 
 
+class WindowsSupportTests(unittest.TestCase):
+    def test_state_file_defaults_to_local_app_data_on_windows(self) -> None:
+        with (
+            mock.patch.object(pin_gate.sys, "platform", "win32"),
+            mock.patch.dict(pin_gate.os.environ, {"LOCALAPPDATA": "C:/L"}),
+        ):
+            pin_gate.os.environ.pop("WH_PIN_STATE", None)
+            self.assertEqual(pin_gate.default_state_file(), Path("C:/L/wiring-harness/pin-gate.json"))
+
+    def test_the_msvcrt_lock_path_takes_and_releases_the_lock(self) -> None:
+        msvcrt = mock.MagicMock(LK_LOCK=1, LK_UNLCK=2)
+        msvcrt.locking.side_effect = [OSError("busy"), None, None]
+        with (
+            mock.patch.object(pin_gate, "fcntl", None),
+            mock.patch.object(pin_gate, "msvcrt", msvcrt, create=True),
+            mock.patch.object(pin_gate.time, "sleep"),
+            tempfile.TemporaryFile() as handle,
+        ):
+            pin_gate._lock_file(handle.fileno())
+            pin_gate._unlock_file(handle.fileno())
+        self.assertEqual([call.args[1] for call in msvcrt.locking.call_args_list], [1, 1, 2])
+
+
 class HelperTests(unittest.TestCase):
     def test_safe_next_rejects_open_redirects(self) -> None:
         for bad in (None, "", "http://evil.test/", "//evil.test", "/\\evil", "/a\r\nSet-Cookie: x=1", "/_pin/unlock?x"):
