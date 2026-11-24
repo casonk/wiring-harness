@@ -30,9 +30,11 @@ import hmac
 import html
 import json
 import logging
+import logging.handlers
 import math
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -70,12 +72,87 @@ SERVICE_SCRIPTS = {
 }
 
 
-def configure_logging(level: str) -> None:
-    logging.basicConfig(
-        level=getattr(logging, level.upper(), logging.INFO),
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-        stream=sys.stderr,
-    )
+LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+LOG_FILE_ENV = "WIRING_HARNESS_LOG_FILE"
+LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+LOG_MAX_BYTES = 5 * 1024 * 1024
+LOG_BACKUPS = 3
+
+
+def default_log_path(platform: str | None = None, env: dict[str, str] | None = None) -> Path:
+    """The per-user log location each platform expects."""
+    platform = platform or sys.platform
+    env = os.environ if env is None else env
+    home = Path(env.get("HOME") or env.get("USERPROFILE") or Path.home())
+    if platform == "win32":
+        base = Path(env.get("LOCALAPPDATA") or home / "AppData" / "Local")
+        return base / "wiring-harness" / "Logs" / "pin-gate.log"
+    if platform == "darwin":
+        return home / "Library" / "Logs" / "wiring-harness" / "pin-gate.log"
+    state = Path(env.get("XDG_STATE_HOME") or home / ".local" / "state")
+    return state / "wiring-harness" / "pin-gate.log"
+
+
+def resolve_log_file(value: str | None, platform: str | None = None) -> Path | None:
+    """Map ``--log-file`` / ``WIRING_HARNESS_LOG_FILE`` to a path, or None for no file.
+
+    ``off`` disables, ``default`` is the platform location, anything else is a path, and
+    ``auto`` (the unset default) writes the platform location only where there is no journal
+    to read: macOS and Windows. Linux relies on the systemd journal.
+    """
+    raw = (value if value is not None else os.environ.get(LOG_FILE_ENV) or "auto").strip()
+    lowered = raw.lower()
+    platform = platform or sys.platform
+    if lowered in {"", "off", "none", "0", "false"}:
+        return None
+    if lowered == "auto":
+        return default_log_path(platform) if platform in {"win32", "darwin"} else None
+    if lowered == "default":
+        return default_log_path(platform)
+    return Path(raw).expanduser()
+
+
+class _SafeRotatingFileHandler(logging.handlers.RotatingFileHandler):
+    """A failed rollover (Windows refuses to rename an open file) keeps appending instead of raising."""
+
+    def doRollover(self) -> None:  # noqa: N802 - stdlib name
+        try:
+            super().doRollover()
+        except OSError:
+            if self.stream is None:
+                self.stream = self._open()
+
+
+def _open_private_file(path: Path) -> logging.Handler:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with contextlib.suppress(OSError):
+        path.parent.chmod(0o700)
+    os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600))
+    with contextlib.suppress(OSError):
+        path.chmod(0o600)
+    return _SafeRotatingFileHandler(path, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUPS, encoding="utf-8", delay=True)
+
+
+def _mark(handler: logging.Handler, kind: str) -> logging.Handler:
+    handler._pin_gate = kind  # type: ignore[attr-defined]
+    handler.setFormatter(logging.Formatter(LOG_FORMAT))
+    return handler
+
+
+def configure_logging(level: str = "INFO", log_file: str | None = None) -> None:
+    """Install stderr (and optionally rotating file) handlers once; a bad log file is never fatal."""
+    name = (level or "INFO").strip().upper()
+    root = logging.getLogger()
+    root.setLevel(getattr(logging, name if name in LOG_LEVELS else "INFO"))
+    have = {getattr(h, "_pin_gate", None) for h in root.handlers}
+    if "stderr" not in have:
+        root.addHandler(_mark(logging.StreamHandler(sys.stderr), "stderr"))
+    path = resolve_log_file(log_file)
+    if path is not None and "file" not in have:
+        try:
+            root.addHandler(_mark(_open_private_file(path), "file"))
+        except OSError as exc:
+            LOG.warning("log file %s unavailable: %s", path, exc)
 
 
 # ---------------------------------------------------------------------------
@@ -335,7 +412,24 @@ class Lockouts:
 
 
 class SecretError(RuntimeError):
-    """A secret could not be read; the gate fails closed."""
+    """A secret could not be read; the gate fails closed.
+
+    ``reason`` says why, so the browser and the log never blame the vault for a missing
+    binary: ``locked`` (vault locked), ``missing`` (auto-pass not runnable), ``denied``
+    (request refused or entry absent) or ``error`` (anything else).
+    """
+
+    def __init__(self, message: str, reason: str = "error") -> None:
+        super().__init__(message)
+        self.reason = reason
+
+
+UNAVAILABLE_BODIES = {
+    "locked": b"PIN check unavailable: the auto-pass vault is locked",
+    "missing": b"PIN check unavailable: the auto-pass command was not found by the PIN gate",
+    "denied": b"PIN check unavailable: auto-pass refused the request",
+    "error": b"PIN check unavailable: secrets could not be read (see the PIN gate log)",
+}
 
 
 class AutoPassSecrets:
@@ -369,10 +463,13 @@ class AutoPassSecrets:
                 check=False,
             )
         except (OSError, subprocess.SubprocessError) as exc:
-            raise SecretError(f"auto-pass unavailable: {exc}") from exc
+            reason = "missing" if isinstance(exc, FileNotFoundError) else "error"
+            raise SecretError(f"auto-pass unavailable ({self.command!r}): {exc}", reason) from exc
         value = result.stdout.strip("\r\n")
         if result.returncode != 0 or not value:
-            raise SecretError(f"auto-pass could not provide {entry!r}")
+            detail = (result.stderr or "").strip().splitlines()[-1:] or [""]
+            reason = "locked" if "locked" in detail[0].lower() else "denied"
+            raise SecretError(f"auto-pass could not provide {entry!r} ({reason}): {detail[0][:200]}", reason)
         with self._lock:
             self._cache[entry] = (self.clock(), value)
         return value
@@ -967,7 +1064,7 @@ def make_handler(gate: Gate):
                 unlocked = gate.has_valid_cookie(site, self.headers.get("Cookie", ""))
             except SecretError as exc:
                 LOG.error("failing closed for %s: %s", site.name, exc)
-                return self._send(HTTPStatus.SERVICE_UNAVAILABLE, b"locked: secrets unavailable")
+                return self._send(HTTPStatus.SERVICE_UNAVAILABLE, UNAVAILABLE_BODIES.get(exc.reason, UNAVAILABLE_BODIES["error"]))
             if not unlocked:
                 return self._redirect_to_unlock(next_path)
             state, days = gate.rotation.status(site.name)
@@ -980,7 +1077,7 @@ def make_handler(gate: Gate):
                 valid = gate.has_valid_cookie(site, self.headers.get("Cookie", ""))
             except SecretError as exc:
                 LOG.error("failing closed for %s: %s", site.name, exc)
-                return self._send(HTTPStatus.SERVICE_UNAVAILABLE, b"locked: secrets unavailable")
+                return self._send(HTTPStatus.SERVICE_UNAVAILABLE, UNAVAILABLE_BODIES.get(exc.reason, UNAVAILABLE_BODIES["error"]))
             if valid:
                 return self._send(HTTPStatus.NO_CONTENT)
             original = self.headers.get("X-Forwarded-Uri", "/")
@@ -998,7 +1095,7 @@ def make_handler(gate: Gate):
                 )
             except SecretError as exc:
                 LOG.error("failing closed for %s: %s", site.name, exc)
-                return self._send(HTTPStatus.SERVICE_UNAVAILABLE, b"locked: secrets unavailable")
+                return self._send(HTTPStatus.SERVICE_UNAVAILABLE, UNAVAILABLE_BODIES.get(exc.reason, UNAVAILABLE_BODIES["error"]))
             if outcome == "ok":
                 attrs = f"{COOKIE_NAME}={cookie}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age={site.ttl_seconds}"
                 return self._send(HTTPStatus.SEE_OTHER, headers={"Location": next_path, "Set-Cookie": attrs})
@@ -1036,7 +1133,7 @@ def make_handler(gate: Gate):
                 outcome, seconds, cookie = gate.attempt(site, client_ip(self.headers), guess)
             except SecretError as exc:
                 LOG.error("failing closed for %s: %s", site.name, exc)
-                return self._send(HTTPStatus.SERVICE_UNAVAILABLE, b"locked: secrets unavailable")
+                return self._send(HTTPStatus.SERVICE_UNAVAILABLE, UNAVAILABLE_BODIES.get(exc.reason, UNAVAILABLE_BODIES["error"]))
             if outcome == "expired":
                 target = f"{CHANGE_PATH}?reason=expired&next={quote(next_path, safe='/')}"
                 return self._send(HTTPStatus.SEE_OTHER, headers={"Location": target})
@@ -1085,6 +1182,12 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         seal=Seal.from_environment(store),
     )
     gate.rotation.ensure(sites)
+    if shutil.which(gate.secrets.command) is None:
+        LOG.error(
+            "auto-pass command %r not found on PATH=%s: PIN checks that need the vault will fail",
+            gate.secrets.command,
+            os.environ.get("PATH", ""),
+        )
     if gate.seal is None:
         LOG.warning("no sealed key: every PIN check needs the auto-pass vault unlocked")
     else:
@@ -1137,6 +1240,7 @@ def _cmd_reset(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--log-level", default=os.environ.get("WIRING_HARNESS_LOG_LEVEL", "INFO"))
+    parser.add_argument("--log-file", default=None, help="PATH, 'default', or 'off' (auto: file on macOS/Windows only)")
     sub = parser.add_subparsers(dest="command", required=True)
     serve = sub.add_parser("serve", help="run the gate on loopback")
     serve.add_argument("--services", default=str(DEFAULT_SERVICES_TOML))
@@ -1154,7 +1258,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    configure_logging(args.log_level)
+    configure_logging(args.log_level, args.log_file)
     return args.func(args)
 
 

@@ -185,6 +185,16 @@ Logs go to stderr (the journal under `SyslogIdentifier=wiring-harness-pin-gate`)
 `WIRING_HARNESS_LOG_LEVEL` sets the level. Wrong PINs, locks and unlocks are logged with the site and
 address, never the guess.
 
+Without a journal (macOS, Windows) the gate writes an owner-only rotating file instead: `--log-file
+{PATH|default|off}` or `WIRING_HARNESS_LOG_FILE`, on by default off Linux. `default` is
+`~/Library/Logs/wiring-harness/pin-gate.log` on macOS, `%LOCALAPPDATA%\wiring-harness\Logs\pin-gate.log` on Windows and
+`$XDG_STATE_HOME/wiring-harness/pin-gate.log` on Linux.
+
+When the gate cannot read a secret it fails closed with a 503 whose text says why, and the log line carries the same
+reason: `the auto-pass vault is locked`, `the auto-pass command was not found by the PIN gate` (a system unit has a
+minimal `PATH`; the unit template adds `<home>/.local/bin`, and `serve` logs an error at start-up when `auto-pass` is not
+on its `PATH`), `auto-pass refused the request`, or a generic `see the PIN gate log`.
+
 ## Limits
 
 A PIN gates the HTTP surface only; it does not protect a backend reachable another way. A 4-digit PIN
