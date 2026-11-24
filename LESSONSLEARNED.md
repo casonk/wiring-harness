@@ -10,6 +10,11 @@ Tracked durable lessons for `wiring-harness`.
 
 ## Lessons
 
+- A sealed PIN verifier is only half of browser recovery. If the credential
+  administration UI fetches its own login token from the locked vault, the
+  backend still cannot start. Pair the gate's TPM key with a separately sealed,
+  narrow web token while leaving the vault password interactive.
+
 - Portfolio-general WireGuard/VPN and TLS/Caddy lessons live in
   `traction-control/LESSONSLEARNED.md` (agents read it first); the entries here
   are repo-specific. The Caddy "reload does not re-read certs; restart after
